@@ -1,0 +1,15 @@
+# ── 核心依赖（P1/P2 必需）──
+requests>=2.31        # 模型 API 调用
+jinja2>=3.1           # Prompt 模板 + HTML 报告模板
+openai>=1.40          # embeddings 接口（语义相似度指标）
+python-dotenv>=1.0    # .env 加载
+
+# ── 测试 ──
+pytest>=7.4
+pytest-cov>=4.1
+
+# ── RAG 探索（P3 才装，避免拖慢 P1 环境搭建）──
+# langchain>=0.3
+# langchain-community>=0.3
+# langchain-openai>=0.2
+# chromadb>=0.5

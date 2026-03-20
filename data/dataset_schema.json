@@ -1,0 +1,56 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "LLM 评测数据集 Schema",
+  "description": "qa_samples.json 的结构定义：每条样本一个问题 + 参考答案，供三种 Prompt 策略评测",
+  "type": "object",
+  "required": ["version", "samples"],
+  "properties": {
+    "version": {
+      "type": "string",
+      "description": "数据集版本号"
+    },
+    "task_description": {
+      "type": "string",
+      "description": "任务说明，会作为 system prompt 或 Prompt 前缀"
+    },
+    "few_shot_examples": {
+      "type": "array",
+      "description": "全局 Few-shot 示例（2-4 条），所有样本共用",
+      "items": {
+        "type": "object",
+        "required": ["question", "answer"],
+        "properties": {
+          "question": { "type": "string" },
+          "answer": { "type": "string" }
+        }
+      }
+    },
+    "samples": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "question", "gold_answer"],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "description": "样本编号"
+          },
+          "question": {
+            "type": "string",
+            "description": "评测问题"
+          },
+          "gold_answer": {
+            "type": "string",
+            "description": "参考答案，用于语义相似度和 LLM-as-Judge 评分"
+          },
+          "category": {
+            "type": "string",
+            "description": "题目类别：常识 / 推理 / 翻译 / 代码 / 数学",
+            "enum": ["常识", "推理", "翻译", "代码", "数学"]
+          }
+        }
+      }
+    }
+  }
+}

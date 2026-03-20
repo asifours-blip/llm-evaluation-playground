@@ -1,0 +1,7 @@
+{{ task_description | default("请参考以下示例，以相同风格回答问题。") }}
+
+{% for ex in examples %}问题：{{ ex.question }}
+回答：{{ ex.answer }}
+
+{% endfor %}问题：{{ question }}
+回答：
