@@ -1,4 +1,4 @@
-# LLM 应用评测与快速原型工具
+﻿# LLM 应用评测与快速原型工具
 
 用 Python 搭建的 LLM 评测框架：封装统一的 OpenAI 兼容模型调用层，对 **Zero-shot / Few-shot / Chain-of-Thought** 三种 Prompt 策略做自动化对比，输出量化评测报告（语义相似度 + LLM-as-Judge 双指标），并基于 LangChain 探索 RAG 文档问答。
 
@@ -68,5 +68,5 @@ llm-evaluation-playground/
 pytest tests/ --cov=src --cov-report=term-missing
 # 38 passed, 覆盖率 97%
 ```
-
+![测试结果](22ba3b18ae85b6351a2024e5e6ad0edf.png)
 测试全程 Mock 模型 API 和 embedding，不消耗真实额度。
