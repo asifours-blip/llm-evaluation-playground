@@ -22,6 +22,7 @@ from rag_quality_lab.experiments import (
     PlannedCall,
     ProviderBundle,
     RegressionConfig,
+    RegressionFixture,
     compare_experiments,
     evaluate_regression,
     preflight_budget,
@@ -213,10 +214,15 @@ def _handle_compare(args: argparse.Namespace) -> int:
 
 def _handle_regression(args: argparse.Namespace) -> int:
     if args.fixture is not None:
-        payload = json.loads(args.fixture.read_text(encoding="utf-8-sig"))
-        passed = bool(payload.get("passed", False))
-        _print_json(payload)
-        return int(not passed)
+        fixture = RegressionFixture.model_validate_json(
+            args.fixture.read_text(encoding="utf-8-sig")
+        )
+        verdict = evaluate_regression(
+            compare_experiments(fixture.baseline, fixture.candidate),
+            rules=fixture.rules,
+        )
+        _print_json(verdict.model_dump(mode="json"))
+        return int(not verdict.passed)
     required = (args.database, args.baseline, args.candidate, args.rules)
     if any(value is None for value in required):
         raise ValueError(

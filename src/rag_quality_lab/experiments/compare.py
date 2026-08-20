@@ -60,6 +60,14 @@ class RegressionConfig(BaseModel):
     rules: list[RegressionRule]
 
 
+class RegressionFixture(BaseModel):
+    """Portable baseline/candidate pair evaluated by the real regression gate."""
+
+    baseline: ExperimentRecord
+    candidate: ExperimentRecord
+    rules: list[RegressionRule]
+
+
 def compare_experiments(
     baseline: ExperimentRecord, candidate: ExperimentRecord
 ) -> ComparisonResult:

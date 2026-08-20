@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  offline-quality-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install package and development tools
+        run: python -m pip install -e ".[dev]"
+
+      - name: Lint
+        run: ruff check .
+
+      - name: Type-check pure logic
+        run: >-
+          mypy
+          src/rag_quality_lab/domain
+          src/rag_quality_lab/config
+          src/rag_quality_lab/metrics
+          src/rag_quality_lab/experiments/budget.py
+          src/rag_quality_lab/experiments/compare.py
+
+      - name: Test deterministic modules with focused coverage
+        run: >-
+          pytest -m "not live"
+          --cov=rag_quality_lab.domain
+          --cov=rag_quality_lab.config
+          --cov=rag_quality_lab.metrics
+          --cov=rag_quality_lab.experiments.budget
+          --cov=rag_quality_lab.experiments.compare
+          --cov-report=term-missing
+          --cov-fail-under=90
+
+      - name: Evaluate offline regression fixture
+        run: rag-quality regression --fixture tests/fixtures/offline_baseline.json
