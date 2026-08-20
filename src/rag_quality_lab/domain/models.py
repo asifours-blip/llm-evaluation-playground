@@ -230,3 +230,29 @@ class ProviderResponse(BaseModel, Generic[ResponseT]):
     model: str
     latency_ms: float = Field(default=0, ge=0)
     raw: dict[str, Any] | None = None
+
+
+class Document(BaseModel):
+    """A normalized source document with a stable identity."""
+
+    id: str
+    title: str
+    text: str
+    source_path: str
+
+
+class Chunk(BaseModel):
+    """A deterministic retrieval unit derived from a document."""
+
+    id: str
+    document_id: str
+    text: str
+    start_char: int = Field(default=0, ge=0)
+    end_char: int = Field(default=0, ge=0)
+
+
+class RetrievalHit(BaseModel):
+    """A chunk paired with its query similarity score."""
+
+    chunk: Chunk
+    score: float

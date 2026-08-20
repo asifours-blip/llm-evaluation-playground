@@ -3,6 +3,8 @@
 from rag_quality_lab.domain.models import (
     Answerability,
     BudgetConfig,
+    Chunk,
+    Document,
     EvaluationCase,
     EvaluationDataset,
     ExperimentConfig,
@@ -12,6 +14,7 @@ from rag_quality_lab.domain.models import (
     ProviderConfig,
     ProviderResponse,
     RetrievalConfig,
+    RetrievalHit,
     StructuredAnswer,
     TokenUsage,
 )
@@ -19,15 +22,18 @@ from rag_quality_lab.domain.models import (
 __all__ = [
     "Answerability",
     "BudgetConfig",
+    "Chunk",
+    "Document",
     "EvaluationCase",
     "EvaluationDataset",
     "ExperimentConfig",
     "JudgeVerdict",
     "ModelPrice",
     "PricingConfig",
-    "ProviderResponse",
     "ProviderConfig",
+    "ProviderResponse",
     "RetrievalConfig",
+    "RetrievalHit",
     "StructuredAnswer",
     "TokenUsage",
 ]
