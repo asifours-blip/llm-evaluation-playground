@@ -304,12 +304,14 @@ class CaseResult(BaseModel):
     """Persisted outcome for one case, configuration, and model."""
 
     case_id: str
+    category: str = ""
     config_id: str
     model: str
     answer: StructuredAnswer | None = None
     retrieval_hits: list[RetrievalHit] = Field(default_factory=list)
     metrics: dict[str, float] = Field(default_factory=dict)
     usage: TokenUsage | None = None
+    judge: JudgeVerdict | None = None
     latency_ms: float = Field(default=0, ge=0)
     cost: Decimal = Field(default=Decimal("0"), ge=0)
     status: Literal["completed", "failed", "skipped"]

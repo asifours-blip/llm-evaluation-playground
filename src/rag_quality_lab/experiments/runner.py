@@ -93,9 +93,13 @@ def run_experiment(
         experiment_id = store.create_experiment(identity)
         pricing, ledger = _prepare_live_budget(config, tasks)
         if config.mode == "live" and ledger is None:
-            store.finish_experiment(experiment_id, ExperimentStatus.BUDGET_EXCEEDED)
-            record = store.get_experiment(experiment_id)
-            return record.model_copy(update={"summary": _summary(record.case_results, dataset)})
+            summary = _summary([], dataset)
+            store.finish_experiment(
+                experiment_id,
+                ExperimentStatus.BUDGET_EXCEEDED,
+                summary=summary,
+            )
+            return store.get_experiment(experiment_id)
 
         status = ExperimentStatus.COMPLETED
         try:
@@ -110,12 +114,13 @@ def run_experiment(
             )
             if budget_stopped:
                 status = ExperimentStatus.BUDGET_EXCEEDED
-            store.finish_experiment(experiment_id, status)
+            running_record = store.get_experiment(experiment_id)
+            summary = _summary(running_record.case_results, dataset)
+            store.finish_experiment(experiment_id, status, summary=summary)
         except Exception:
             store.finish_experiment(experiment_id, ExperimentStatus.FAILED)
             raise
-        record = store.get_experiment(experiment_id)
-        return record.model_copy(update={"summary": _summary(record.case_results, dataset)})
+        return store.get_experiment(experiment_id)
 
 
 def _prepare_live_budget(
@@ -292,6 +297,7 @@ def _evaluate_task(
     }
     result = CaseResult(
         case_id=task.case.id,
+        category=task.case.category,
         config_id=task.config_id,
         model=config.provider.chat_model,
         answer=response.parsed,
@@ -319,6 +325,12 @@ def _summary(
         "failure_count": float(len(results) - len(completed)),
         "total_cost": float(sum((result.cost for result in completed), Decimal("0"))),
         "mean_latency_ms": _mean([result.latency_ms for result in completed]),
+        "p50_latency_ms": _percentile(
+            [result.latency_ms for result in completed], 0.50
+        ),
+        "p95_latency_ms": _percentile(
+            [result.latency_ms for result in completed], 0.95
+        ),
     }
     for metric_name in (
         "retrieval_recall_at_k",
@@ -416,3 +428,11 @@ def _config_id(retrieval: RetrievalConfig) -> str:
 
 def _mean(values: Sequence[float]) -> float:
     return sum(values) / len(values) if values else 0.0
+
+
+def _percentile(values: Sequence[float], percentile: float) -> float:
+    if not values:
+        return 0.0
+    ordered = sorted(values)
+    index = max(0, int((len(ordered) * percentile) + 0.999999) - 1)
+    return ordered[index]

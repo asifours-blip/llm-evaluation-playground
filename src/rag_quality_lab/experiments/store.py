@@ -143,7 +143,11 @@ class ExperimentStore:
         return {(str(row[0]), str(row[1]), str(row[2])) for row in rows}
 
     def finish_experiment(
-        self, experiment_id: str, status: ExperimentStatus
+        self,
+        experiment_id: str,
+        status: ExperimentStatus,
+        *,
+        summary: dict[str, float] | None = None,
     ) -> None:
         if status not in TERMINAL_STATUSES:
             raise ValueError("experiment can only finish in a terminal status")
@@ -152,13 +156,22 @@ class ExperimentStore:
             raise ValueError(f"illegal experiment status transition: {current} -> {status}")
         with self.connection:
             self.connection.execute(
-                "UPDATE experiments SET status = ?, finished_at = ? WHERE id = ?",
-                (status.value, _utc_now(), experiment_id),
+                """
+                UPDATE experiments
+                SET status = ?, finished_at = ?, summary_json = ?
+                WHERE id = ?
+                """,
+                (
+                    status.value,
+                    _utc_now(),
+                    _canonical_payload(summary or {}),
+                    experiment_id,
+                ),
             )
 
     def get_experiment(self, experiment_id: str) -> ExperimentRecord:
         row = self.connection.execute(
-            "SELECT status, identity_json FROM experiments WHERE id = ?",
+            "SELECT status, identity_json, summary_json FROM experiments WHERE id = ?",
             (experiment_id,),
         ).fetchone()
         if row is None:
@@ -179,6 +192,7 @@ class ExperimentStore:
                 CaseResult.model_validate_json(result_row["payload_json"])
                 for result_row in result_rows
             ],
+            summary=json.loads(row["summary_json"]),
         )
 
     def _status(self, experiment_id: str) -> ExperimentStatus:
@@ -201,6 +215,7 @@ class ExperimentStore:
                 id TEXT PRIMARY KEY,
                 status TEXT NOT NULL,
                 identity_json TEXT NOT NULL,
+                summary_json TEXT NOT NULL DEFAULT '{}',
                 created_at TEXT NOT NULL,
                 finished_at TEXT
             );
@@ -255,11 +270,23 @@ class ExperimentStore:
             );
             """
         )
+        experiment_columns = {
+            str(row[1])
+            for row in self.connection.execute("PRAGMA table_info(experiments)").fetchall()
+        }
+        if "summary_json" not in experiment_columns:
+            self.connection.execute(
+                "ALTER TABLE experiments ADD COLUMN summary_json TEXT NOT NULL DEFAULT '{}'"
+            )
 
 
 def _canonical_json(model: BaseModel) -> str:
+    return _canonical_payload(model.model_dump(mode="json"))
+
+
+def _canonical_payload(payload: object) -> str:
     return json.dumps(
-        model.model_dump(mode="json"),
+        payload,
         ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),

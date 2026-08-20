@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>RAG Quality Lab — {{ report.id }}</title>
+  <style>
+    :root { color-scheme: light; --ink:#18212f; --muted:#657084; --line:#dce2ea; --card:#f7f9fc; --accent:#b42318; }
+    * { box-sizing: border-box; }
+    body { margin:0; font:14px/1.5 system-ui,sans-serif; color:var(--ink); background:#fff; }
+    main { width:min(1180px,94vw); margin:32px auto 72px; }
+    h1,h2,h3 { line-height:1.2; }
+    h2 { margin-top:36px; border-bottom:1px solid var(--line); padding-bottom:8px; }
+    .badge { display:inline-block; padding:5px 10px; border:2px solid var(--accent); color:var(--accent); font-weight:800; letter-spacing:.08em; border-radius:6px; }
+    .muted { color:var(--muted); }
+    .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:12px; }
+    .card { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:14px; overflow-wrap:anywhere; }
+    .value { font-size:20px; font-weight:750; }
+    table { width:100%; border-collapse:collapse; font-variant-numeric:tabular-nums; }
+    th,td { padding:8px; border:1px solid var(--line); text-align:left; vertical-align:top; }
+    th { background:var(--card); }
+    details { border:1px solid var(--line); border-radius:8px; margin:10px 0; padding:10px 14px; }
+    summary { cursor:pointer; font-weight:700; }
+    pre { white-space:pre-wrap; background:#111827; color:#f9fafb; padding:12px; border-radius:6px; overflow:auto; }
+    code { overflow-wrap:anywhere; }
+  </style>
+</head>
+<body>
+<main>
+  <span class="badge">{{ report.badge|upper }}</span>
+  <h1>RAG Quality Lab</h1>
+  <p class="muted">Experiment {{ report.id }} · {{ report.status }}</p>
+
+  <h2>Reproducibility identity</h2>
+  <div class="grid">
+    <div class="card"><div class="muted">Commit SHA</div><code>{{ report.identity.commit_sha }}</code></div>
+    <div class="card"><div class="muted">Dataset hash</div><code>{{ report.identity.dataset_hash }}</code></div>
+    <div class="card"><div class="muted">Random seed</div><div class="value">{{ report.identity.random_seed }}</div></div>
+    <div class="card"><div class="muted">Dirty worktree</div><div class="value">{{ report.identity.dirty }}</div></div>
+  </div>
+
+  <h2>Quality summary</h2>
+  <div class="grid">
+  {% for name, value in report.summary|dictsort %}
+    <div class="card"><div class="muted">{{ name }}</div><div class="value">{{ value }}</div></div>
+  {% endfor %}
+  </div>
+
+  <h2>System and cost</h2>
+  <div class="grid">
+    <div class="card"><div class="muted">P50 latency</div><div class="value">{{ report.system.p50_latency_ms }} ms</div></div>
+    <div class="card"><div class="muted">P95 latency</div><div class="value">{{ report.system.p95_latency_ms }} ms</div></div>
+    <div class="card"><div class="muted">Total tokens</div><div class="value">{{ report.system.total_tokens }}</div></div>
+    <div class="card"><div class="muted">Total cost</div><div class="value">{{ report.system.total_cost }}</div></div>
+  </div>
+
+  <h2>Category breakdown</h2>
+  {% for category, metrics in report.category_breakdown|dictsort %}
+  <h3>{{ category }}</h3>
+  <table><tbody>{% for name, value in metrics|dictsort %}<tr><th>{{ name }}</th><td>{{ value }}</td></tr>{% endfor %}</tbody></table>
+  {% else %}<p class="muted">No completed category metrics.</p>{% endfor %}
+
+  <h2>Failures</h2>
+  {% if report.failures %}<pre>{{ report.failures|tojson(indent=2) }}</pre>{% else %}<p>No failures recorded.</p>{% endif %}
+
+  <h2>Case evidence</h2>
+  {% for case in report.case_results %}
+  <details>
+    <summary>{{ case.case_id }} · {{ case.config_id }} · {{ case.model }}</summary>
+    <h3>Answer</h3><p>{{ case.answer.answer if case.answer else "No answer" }}</p>
+    <p><strong>Citations:</strong> {{ case.answer.citations|join(", ") if case.answer else "" }}</p>
+    {% if case.judge %}<p><strong>Judge:</strong> {{ case.judge.score }} — {{ case.judge.reason }}</p>{% endif %}
+    <h3>Retrieved evidence</h3>
+    {% for hit in case.retrieval_hits %}<pre>{{ hit.chunk.id }} · score={{ hit.score }}
+{{ hit.chunk.text }}</pre>{% else %}<p class="muted">No retrieval hits.</p>{% endfor %}
+  </details>
+  {% endfor %}
+
+  <h2>Configuration</h2>
+  <pre>{{ report.identity.config|tojson(indent=2) }}</pre>
+  {% if report.baseline_comparison %}<h2>Baseline deltas</h2><pre>{{ report.baseline_comparison|tojson(indent=2) }}</pre>{% endif %}
+  {% if report.judge_calibration %}<h2>Judge calibration</h2><pre>{{ report.judge_calibration|tojson(indent=2) }}</pre>{% endif %}
+</main>
+</body>
+</html>

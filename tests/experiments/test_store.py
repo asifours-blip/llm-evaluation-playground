@@ -76,7 +76,11 @@ def test_completed_experiment_round_trips_typed_results(tmp_path: Path) -> None:
     with ExperimentStore(tmp_path / "runs.sqlite3") as store:
         experiment_id = store.create_experiment(example_identity())
         store.record_case_result(experiment_id, example_case_result())
-        store.finish_experiment(experiment_id, ExperimentStatus.COMPLETED)
+        store.finish_experiment(
+            experiment_id,
+            ExperimentStatus.COMPLETED,
+            summary={"answer_f1": 1.0},
+        )
 
         loaded = store.get_experiment(experiment_id)
 
@@ -86,6 +90,7 @@ def test_completed_experiment_round_trips_typed_results(tmp_path: Path) -> None:
     assert loaded.case_results[0].answer is not None
     assert loaded.case_results[0].answer.citations == ["doc-01"]
     assert loaded.case_results[0].cost == Decimal("0.0001")
+    assert loaded.summary == {"answer_f1": 1.0}
 
 
 def test_completed_case_keys_support_resume_and_reject_duplicates(tmp_path: Path) -> None:

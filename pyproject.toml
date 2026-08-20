@@ -33,7 +33,7 @@ rag-quality = "rag_quality_lab.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-rag_quality_lab = ["py.typed"]
+rag_quality_lab = ["py.typed", "reporting/templates/*.jinja2"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
