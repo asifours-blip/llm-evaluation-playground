@@ -143,11 +143,12 @@ class OpenAICompatibleProvider:
         contexts: Sequence[str],
         *,
         model: str,
+        instructions: str | None = None,
     ) -> ProviderResponse[StructuredAnswer]:
         started_at = time.perf_counter()
         primary = self._chat_completion(
             model=model,
-            messages=self._answer_messages(question, contexts),
+            messages=self._answer_messages(question, contexts, instructions),
         )
         usage = self._token_usage(primary)
         content = self._message_content(primary)
@@ -287,16 +288,19 @@ class OpenAICompatibleProvider:
 
     @staticmethod
     def _answer_messages(
-        question: str, contexts: Sequence[str]
+        question: str,
+        contexts: Sequence[str],
+        instructions: str | None,
     ) -> list[dict[str, str]]:
         context = "\n\n".join(contexts)
+        system_message = instructions or (
+            "Answer only from the supplied context. Return JSON with answer, "
+            "citations, and abstained. Abstain when evidence is insufficient."
+        )
         return [
             {
                 "role": "system",
-                "content": (
-                    "Answer only from the supplied context. Return JSON with answer, "
-                    "citations, and abstained. Abstain when evidence is insufficient."
-                ),
+                "content": system_message,
             },
             {
                 "role": "user",

@@ -176,9 +176,11 @@ class ExperimentConfig(BaseModel):
     name: str
     mode: Literal["mock", "live"]
     dataset_path: Path
+    knowledge_base_path: Path = Path("data/knowledge_base")
     database_path: Path
     artifact_dir: Path
     random_seed: int = 42
+    max_workers: int = Field(default=4, ge=1, le=16)
     provider: ProviderConfig
     retrieval: list[RetrievalConfig]
     budget: BudgetConfig
@@ -321,3 +323,4 @@ class ExperimentRecord(BaseModel):
     identity: ExperimentIdentity
     status: ExperimentStatus
     case_results: list[CaseResult] = Field(default_factory=list)
+    summary: dict[str, float] = Field(default_factory=dict)

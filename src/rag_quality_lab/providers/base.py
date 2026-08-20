@@ -26,5 +26,6 @@ class ChatProvider(Protocol):
         contexts: Sequence[str],
         *,
         model: str,
+        instructions: str | None = None,
     ) -> ProviderResponse[StructuredAnswer]:
         """Return a structured answer and usage metadata."""

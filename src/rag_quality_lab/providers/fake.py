@@ -45,7 +45,9 @@ class FakeChatProvider:
         contexts: Sequence[str],
         *,
         model: str,
+        instructions: str | None = None,
     ) -> ProviderResponse[StructuredAnswer]:
+        del instructions
         if question not in self.answers:
             raise KeyError(f"Unscripted question: {question}")
         parsed = self.answers[question].model_copy(deep=True)
