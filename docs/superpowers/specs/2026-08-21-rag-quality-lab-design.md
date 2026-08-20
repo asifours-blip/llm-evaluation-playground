@@ -314,7 +314,7 @@ Rules:
 - scheduling stops before the hard budget is exceeded;
 - completed partial results are persisted with `budget_exceeded` status.
 
-Using the official DeepSeek direct rates verified on 2026-08-21—Flash cache-miss input/output at RMB 1/2 per million tokens and Pro at RMB 3/6—the current 420-call plan has a conservative buffered estimate of approximately RMB 4.74, excluding embeddings. This value is evidence for the design only; every live run must re-verify current official pricing.
+The official DeepSeek direct price page re-verified on 2026-08-21 uses time-tiered CNY pricing. During Beijing peak hours (09:00–12:00 and 14:00–18:00), Flash cache-hit input/cache-miss input/output cost RMB 0.10/3/9 per million tokens and Pro costs RMB 0.30/9/27; all three rates are half-price outside those windows. Hard-budget preflight deliberately uses peak rates as the worst case. With Flash for the 36-call pilot, 96 Flash plus 96 Pro final-generation calls, and Pro for 192 judge calls, the 420-call plan costs RMB 12.460464 before buffering and RMB 15.575580 after the 1.25 multiplier, excluding embeddings. The buffered estimate remains below the RMB 18 preflight threshold for a RMB 20 hard limit. This value is dated design evidence only; every live run must re-verify current official pricing.
 
 SiliconFlow may be used for a free development model and free BGE embeddings when the account is eligible. Its fixed free-model rate limits are treated as an operational constraint, not a cost guarantee for other hosted models.
 

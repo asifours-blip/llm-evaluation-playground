@@ -633,11 +633,11 @@ Use `Decimal` throughout. Implement pricing freshness, planned-call cost, 1.25 s
 
 - [ ] **Step 4: Add verified pricing evidence and verify GREEN**
 
-The pricing YAML records DeepSeek’s official source URL, `verified_at: 2026-08-21`, CNY currency, and the official Flash/Pro rates described in the design specification.
+The pricing YAML records DeepSeek’s official source URL, `verified_at: 2026-08-21`, CNY currency, and peak-hour Flash/Pro rates as the conservative budget basis. It also records that off-peak rates are half of peak rates and the Beijing peak windows are 09:00–12:00 and 14:00–18:00.
 
 Run: `python -m pytest tests/experiments/test_budget.py -q`
 
-Expected: PASS, including the RMB 4.74 full-plan example within one cent.
+Expected: PASS, including the peak-rate RMB 15.575580 buffered full-plan example within one cent.
 
 - [ ] **Step 5: Commit**
 
