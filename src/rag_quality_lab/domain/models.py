@@ -154,6 +154,8 @@ class PricingConfig(BaseModel):
     verified_at: date
     source_url: AnyHttpUrl
     models: dict[str, ModelPrice]
+    rate_basis: Literal["standard", "peak", "off_peak"] = "standard"
+    notes: list[str] = Field(default_factory=list)
 
     def is_stale(self, on_date: date, max_age_days: int = 7) -> bool:
         return (on_date - self.verified_at).days > max_age_days
@@ -200,6 +202,15 @@ class TokenUsage(BaseModel):
 
     input_tokens: int = Field(ge=0)
     output_tokens: int = Field(ge=0)
+    input_cache_hit_tokens: int = Field(default=0, ge=0)
+    input_cache_miss_tokens: int = Field(default=0, ge=0)
+
+    @model_validator(mode="after")
+    def validate_cache_breakdown(self) -> Self:
+        accounted_input = self.input_cache_hit_tokens + self.input_cache_miss_tokens
+        if accounted_input not in {0, self.input_tokens}:
+            raise ValueError("cache hit and miss tokens must sum to input_tokens")
+        return self
 
     @property
     def total_tokens(self) -> int:

@@ -1,0 +1,18 @@
+provider: deepseek
+currency: CNY
+verified_at: 2026-08-21
+source_url: https://api-docs.deepseek.com/zh-cn/quick_start/pricing/
+rate_basis: peak
+models:
+  deepseek-v4-flash:
+    input_cache_hit: 0.10
+    input_cache_miss: 3.0
+    output: 9.0
+  deepseek-v4-pro:
+    input_cache_hit: 0.30
+    input_cache_miss: 9.0
+    output: 27.0
+notes:
+  - Peak windows are Beijing time 09:00-12:00 and 14:00-18:00.
+  - Official off-peak cache-hit, cache-miss, and output rates are half of peak rates.
+  - Peak rates are used as the hard-budget preflight worst case.
