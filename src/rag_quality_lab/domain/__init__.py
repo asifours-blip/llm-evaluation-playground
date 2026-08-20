@@ -6,10 +6,14 @@ from rag_quality_lab.domain.models import (
     EvaluationCase,
     EvaluationDataset,
     ExperimentConfig,
+    JudgeVerdict,
     ModelPrice,
     PricingConfig,
     ProviderConfig,
+    ProviderResponse,
     RetrievalConfig,
+    StructuredAnswer,
+    TokenUsage,
 )
 
 __all__ = [
@@ -18,8 +22,12 @@ __all__ = [
     "EvaluationCase",
     "EvaluationDataset",
     "ExperimentConfig",
+    "JudgeVerdict",
     "ModelPrice",
     "PricingConfig",
+    "ProviderResponse",
     "ProviderConfig",
     "RetrievalConfig",
+    "StructuredAnswer",
+    "TokenUsage",
 ]

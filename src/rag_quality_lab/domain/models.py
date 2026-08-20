@@ -6,11 +6,12 @@ from datetime import date
 from decimal import Decimal
 from enum import StrEnum
 from pathlib import Path
-from typing import Literal, Self
+from typing import Any, Generic, Literal, Self, TypeVar
 
 from pydantic import AnyHttpUrl, BaseModel, Field, model_validator
 
 Difficulty = Literal["easy", "medium", "hard"]
+ResponseT = TypeVar("ResponseT")
 
 
 class Answerability(StrEnum):
@@ -192,3 +193,40 @@ class ExperimentConfig(BaseModel):
         if self.mode == "live" and self.pricing_path is None:
             raise ValueError("live experiments require a pricing_path")
         return self
+
+
+class TokenUsage(BaseModel):
+    """Normalized provider token accounting."""
+
+    input_tokens: int = Field(ge=0)
+    output_tokens: int = Field(ge=0)
+
+    @property
+    def total_tokens(self) -> int:
+        return self.input_tokens + self.output_tokens
+
+
+class StructuredAnswer(BaseModel):
+    """Machine-readable response produced by the RAG generator."""
+
+    answer: str
+    citations: list[str] = Field(default_factory=list)
+    abstained: bool
+
+
+class JudgeVerdict(BaseModel):
+    """Structured score returned by a model judge."""
+
+    score: int = Field(ge=1, le=5)
+    passed: bool
+    reason: str
+
+
+class ProviderResponse(BaseModel, Generic[ResponseT]):
+    """A parsed provider result plus observable execution metadata."""
+
+    parsed: ResponseT
+    usage: TokenUsage
+    model: str
+    latency_ms: float = Field(default=0, ge=0)
+    raw: dict[str, Any] | None = None
