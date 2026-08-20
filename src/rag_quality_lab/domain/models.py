@@ -273,3 +273,51 @@ class RetrievalHit(BaseModel):
 
     chunk: Chunk
     score: float
+
+
+class ExperimentStatus(StrEnum):
+    """Lifecycle states persisted for an experiment."""
+
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    BUDGET_EXCEEDED = "budget_exceeded"
+
+
+class ExperimentIdentity(BaseModel):
+    """Inputs required to reproduce an experiment."""
+
+    name: str
+    mode: Literal["mock", "live"]
+    commit_sha: str
+    dirty: bool
+    dataset_hash: str
+    prompt_hashes: dict[str, str]
+    config: dict[str, Any]
+    random_seed: int
+    python_version: str
+
+
+class CaseResult(BaseModel):
+    """Persisted outcome for one case, configuration, and model."""
+
+    case_id: str
+    config_id: str
+    model: str
+    answer: StructuredAnswer | None = None
+    retrieval_hits: list[RetrievalHit] = Field(default_factory=list)
+    metrics: dict[str, float] = Field(default_factory=dict)
+    usage: TokenUsage | None = None
+    latency_ms: float = Field(default=0, ge=0)
+    cost: Decimal = Field(default=Decimal("0"), ge=0)
+    status: Literal["completed", "failed", "skipped"]
+    error: str | None = None
+
+
+class ExperimentRecord(BaseModel):
+    """Typed experiment identity, lifecycle, and case outcomes."""
+
+    id: str
+    identity: ExperimentIdentity
+    status: ExperimentStatus
+    case_results: list[CaseResult] = Field(default_factory=list)

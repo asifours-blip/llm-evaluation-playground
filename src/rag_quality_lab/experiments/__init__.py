@@ -9,10 +9,12 @@ from rag_quality_lab.experiments.budget import (
     estimate_tokens_upper_bound,
     preflight_budget,
 )
+from rag_quality_lab.experiments.store import ExperimentStore
 
 __all__ = [
     "BudgetExceeded",
     "BudgetLedger",
+    "ExperimentStore",
     "PlannedCall",
     "PreflightDecision",
     "calculate_actual_cost",
