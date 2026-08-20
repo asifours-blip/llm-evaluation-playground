@@ -5,6 +5,7 @@
 venv/
 __pycache__/
 *.pyc
+*.egg-info/
 .pytest_cache/
 htmlcov/
 .coverage
@@ -12,4 +13,9 @@ htmlcov/
 # 运行时产物
 data/reports/
 data/vector_stores/
+.ragql/
+artifacts/
+*.sqlite3
+*.embeddings.json
+*.responses.jsonl
 *.log
