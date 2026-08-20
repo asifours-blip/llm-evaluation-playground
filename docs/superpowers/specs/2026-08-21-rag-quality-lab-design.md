@@ -145,14 +145,15 @@ Each case includes:
   "question": "...",
   "reference_answer": "...",
   "answerability": "answerable",
-  "expected_evidence_ids": ["doc-03#chunk-02"],
+  "expected_document_ids": ["doc-03"],
+  "reference_evidence": ["The exact supporting passage copied from doc-03."],
   "category": "retrieval",
   "difficulty": "medium",
   "tags": ["single-hop"]
 }
 ```
 
-Validation rejects duplicate IDs, missing evidence for answerable cases, evidence on unanswerable cases, empty questions or reference answers, unknown categories, and references to documents/chunks that do not exist.
+Validation rejects duplicate IDs, missing documents or reference evidence for answerable cases, evidence on unanswerable cases, empty questions or reference answers, unknown categories, and references to documents that do not exist. Ground truth uses stable document IDs instead of generated chunk IDs so retrieval configurations with different chunk sizes remain comparable.
 
 The original 20-question dataset remains as a legacy generic-QA example but is not used to support the new resume claims.
 
@@ -193,9 +194,9 @@ Unanswerable prompts explicitly require abstention. The evaluator never infers s
 
 ### 9.1 Retrieval Metrics
 
-- **Recall@K:** retrieved relevant evidence IDs divided by all expected evidence IDs.
-- **MRR:** reciprocal rank of the first relevant evidence item, or zero if none is retrieved.
-- **Context Hit Rate:** fraction of answerable cases with at least one expected evidence item in Top-K.
+- **Recall@K:** relevant document IDs represented in Top-K divided by all expected document IDs.
+- **MRR:** reciprocal rank of the first chunk whose document ID is relevant, or zero if none is retrieved.
+- **Context Hit Rate:** fraction of answerable cases with at least one expected document represented in Top-K.
 
 ### 9.2 Generation Metrics
 
