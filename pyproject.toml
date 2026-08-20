@@ -32,6 +32,9 @@ rag-quality = "rag_quality_lab.cli:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+rag_quality_lab = ["py.typed"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = [
@@ -54,3 +57,5 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 python_version = "3.11"
 strict = true
 packages = ["rag_quality_lab"]
+mypy_path = "src"
+explicit_package_bases = true
