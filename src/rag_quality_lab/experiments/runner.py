@@ -297,6 +297,9 @@ def _evaluate_task(
     }
     result = CaseResult(
         case_id=task.case.id,
+        question=task.case.question,
+        reference_answer=task.case.reference_answer,
+        reference_evidence=task.case.reference_evidence,
         category=task.case.category,
         config_id=task.config_id,
         model=config.provider.chat_model,

@@ -11,6 +11,7 @@ from rag_quality_lab.experiments.budget import (
 )
 from rag_quality_lab.experiments.compare import (
     ComparisonResult,
+    RegressionConfig,
     RegressionRule,
     RegressionVerdict,
     compare_experiments,
@@ -25,6 +26,7 @@ __all__ = [
     "ComparisonResult",
     "ExperimentStore",
     "ProviderBundle",
+    "RegressionConfig",
     "RegressionRule",
     "RegressionVerdict",
     "PlannedCall",

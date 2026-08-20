@@ -13,6 +13,7 @@ from rag_quality_lab.domain.models import (
     TokenUsage,
 )
 from rag_quality_lab.experiments.store import ExperimentStore
+from rag_quality_lab.metrics.calibration import HumanAnnotation
 
 
 def example_identity() -> ExperimentIdentity:
@@ -113,3 +114,42 @@ def test_terminal_experiment_rejects_another_transition(tmp_path: Path) -> None:
 
         with pytest.raises(ValueError, match="transition"):
             store.finish_experiment(experiment_id, ExperimentStatus.COMPLETED)
+
+
+def test_live_alias_artifacts_and_human_annotations_are_persisted(
+    tmp_path: Path,
+) -> None:
+    with ExperimentStore(tmp_path / "runs.sqlite3") as store:
+        store.create_experiment(example_identity())
+        live_id = store.create_experiment(
+            example_identity().model_copy(update={"name": "live-pilot", "mode": "live"})
+        )
+
+        assert store.resolve_experiment_id("latest-live") == live_id
+
+        store.record_artifact(
+            live_id,
+            kind="html_report",
+            path="report.html",
+            sha256="abc123",
+            metadata={"badge": "pilot"},
+        )
+        store.record_human_annotations(
+            live_id,
+            [HumanAnnotation(case_id="rag-001", human_score=4)],
+        )
+
+        assert store.get_human_annotations(live_id) == [
+            HumanAnnotation(case_id="rag-001", human_score=4)
+        ]
+        artifact = store.connection.execute(
+            "SELECT kind, path, sha256, metadata_json FROM artifacts"
+        ).fetchone()
+
+    assert artifact is not None
+    assert tuple(artifact) == (
+        "html_report",
+        "report.html",
+        "abc123",
+        '{"badge":"pilot"}',
+    )

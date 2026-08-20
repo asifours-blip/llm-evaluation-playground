@@ -17,6 +17,7 @@ from rag_quality_lab.domain.models import (
     ExperimentRecord,
     ExperimentStatus,
 )
+from rag_quality_lab.metrics.calibration import HumanAnnotation
 
 PRAGMA_NAMES = {"journal_mode", "busy_timeout", "foreign_keys"}
 TERMINAL_STATUSES = {
@@ -61,6 +62,21 @@ class ExperimentStore:
             "SELECT name FROM sqlite_master WHERE type = 'table'"
         ).fetchall()
         return {str(row[0]) for row in rows}
+
+    def resolve_experiment_id(self, identifier: str) -> str:
+        """Resolve an explicit ID or the newest live experiment alias."""
+
+        if identifier != "latest-live":
+            self._status(identifier)
+            return identifier
+        rows = self.connection.execute(
+            "SELECT id, identity_json FROM experiments ORDER BY created_at DESC"
+        ).fetchall()
+        for row in rows:
+            identity = ExperimentIdentity.model_validate_json(row["identity_json"])
+            if identity.mode == "live":
+                return str(row["id"])
+        raise KeyError("no live experiment exists")
 
     def create_experiment(self, identity: ExperimentIdentity) -> str:
         experiment_id = str(uuid.uuid4())
@@ -141,6 +157,66 @@ class ExperimentStore:
             (experiment_id,),
         ).fetchall()
         return {(str(row[0]), str(row[1]), str(row[2])) for row in rows}
+
+    def record_artifact(
+        self,
+        experiment_id: str,
+        *,
+        kind: str,
+        path: str,
+        sha256: str,
+        metadata: dict[str, object] | None = None,
+    ) -> None:
+        self._status(experiment_id)
+        with self.connection:
+            self.connection.execute(
+                """
+                INSERT INTO artifacts(experiment_id, kind, path, sha256, metadata_json)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    experiment_id,
+                    kind,
+                    path,
+                    sha256,
+                    _canonical_payload(metadata or {}),
+                ),
+            )
+
+    def record_human_annotations(
+        self, experiment_id: str, annotations: list[HumanAnnotation]
+    ) -> None:
+        self._status(experiment_id)
+        try:
+            with self.connection:
+                for annotation in annotations:
+                    self.connection.execute(
+                        """
+                        INSERT INTO human_annotations(
+                            experiment_id, case_id, human_score, payload_json
+                        ) VALUES (?, ?, ?, ?)
+                        """,
+                        (
+                            experiment_id,
+                            annotation.case_id,
+                            annotation.human_score,
+                            _canonical_json(annotation),
+                        ),
+                    )
+        except sqlite3.IntegrityError as error:
+            if "UNIQUE" in str(error).upper():
+                raise ValueError("duplicate human annotation") from error
+            raise
+
+    def get_human_annotations(self, experiment_id: str) -> list[HumanAnnotation]:
+        rows = self.connection.execute(
+            """
+            SELECT payload_json FROM human_annotations
+            WHERE experiment_id = ? ORDER BY case_id
+            """,
+            (experiment_id,),
+        ).fetchall()
+        return [HumanAnnotation.model_validate_json(row[0]) for row in rows]
 
     def finish_experiment(
         self,

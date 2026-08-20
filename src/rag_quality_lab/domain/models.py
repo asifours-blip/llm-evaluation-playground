@@ -304,6 +304,9 @@ class CaseResult(BaseModel):
     """Persisted outcome for one case, configuration, and model."""
 
     case_id: str
+    question: str = ""
+    reference_answer: str = ""
+    reference_evidence: list[str] = Field(default_factory=list)
     category: str = ""
     config_id: str
     model: str

@@ -54,6 +54,12 @@ class RegressionVerdict(BaseModel):
     skipped_metrics: list[str] = Field(default_factory=list)
 
 
+class RegressionConfig(BaseModel):
+    """Typed YAML wrapper for deterministic gate rules."""
+
+    rules: list[RegressionRule]
+
+
 def compare_experiments(
     baseline: ExperimentRecord, candidate: ExperimentRecord
 ) -> ComparisonResult:

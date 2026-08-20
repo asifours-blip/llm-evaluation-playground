@@ -40,4 +40,4 @@ def load_experiment_config(path: str | Path) -> ExperimentConfig:
     pricing = load_yaml_model(pricing_path, PricingConfig)
     if experiment.budget.currency != pricing.currency:
         raise ValueError("budget and pricing currency must match")
-    return experiment
+    return experiment.model_copy(update={"pricing_path": pricing_path.resolve()})
