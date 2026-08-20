@@ -232,6 +232,12 @@ class JudgeVerdict(BaseModel):
     passed: bool
     reason: str
 
+    @model_validator(mode="after")
+    def validate_pass_threshold(self) -> Self:
+        if self.passed != (self.score >= 4):
+            raise ValueError("passed must be true exactly when score is 4 or 5")
+        return self
+
 
 class ProviderResponse(BaseModel, Generic[ResponseT]):
     """A parsed provider result plus observable execution metadata."""

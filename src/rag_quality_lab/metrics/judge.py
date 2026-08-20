@@ -1,0 +1,101 @@
+"""Structured scalar and order-controlled pairwise judge helpers."""
+
+import json
+from typing import Literal
+
+from pydantic import BaseModel
+
+from rag_quality_lab.domain.models import JudgeVerdict
+
+Preference = Literal["A", "B", "tie"]
+
+
+class PairwiseVerdict(BaseModel):
+    """Preference expressed using positions in one presented order."""
+
+    preferred: Preference
+    reason: str
+
+
+class PairwiseResult(BaseModel):
+    """Preference normalized to the original candidate identities."""
+
+    winner: Preference | None
+    position_sensitive: bool
+    forward: PairwiseVerdict
+    reversed_order: PairwiseVerdict
+
+
+def parse_judge_verdict(content: str) -> JudgeVerdict:
+    """Parse scalar judge JSON through the score/pass invariant."""
+
+    return JudgeVerdict.model_validate(json.loads(content))
+
+
+def build_scalar_judge_prompt(
+    *,
+    question: str,
+    reference_answer: str,
+    candidate_answer: str,
+    evidence: list[str],
+) -> str:
+    """Build the fixed 1-to-5 correctness and faithfulness rubric."""
+
+    evidence_text = "\n".join(evidence)
+    return (
+        "Score the candidate from 1 to 5 for correctness and faithfulness. "
+        "Scores 4 and 5 pass. Use only the reference and evidence. Return JSON "
+        'with keys "score", "passed", and "reason".\n\n'
+        f"Question:\n{question}\n\nReference:\n{reference_answer}\n\n"
+        f"Evidence:\n{evidence_text}\n\nCandidate:\n{candidate_answer}"
+    )
+
+
+def build_pairwise_judge_prompt(
+    *,
+    question: str,
+    reference_answer: str,
+    evidence: list[str],
+    answer_a: str,
+    answer_b: str,
+) -> str:
+    """Build a pairwise rubric whose answer order is controlled by the caller."""
+
+    evidence_text = "\n".join(evidence)
+    return (
+        "Choose A, B, or tie using correctness and faithfulness only. Return JSON "
+        'with keys "preferred" and "reason".\n\n'
+        f"Question:\n{question}\n\nReference:\n{reference_answer}\n\n"
+        f"Evidence:\n{evidence_text}\n\nA:\n{answer_a}\n\nB:\n{answer_b}"
+    )
+
+
+def resolve_pairwise(
+    *,
+    forward: PairwiseVerdict,
+    reversed_order: PairwiseVerdict,
+) -> PairwiseResult:
+    """Normalize A/B and B/A verdicts and exclude order-sensitive preferences."""
+
+    reversed_normalized = _reverse_preference(reversed_order.preferred)
+    if forward.preferred == reversed_normalized:
+        return PairwiseResult(
+            winner=forward.preferred,
+            position_sensitive=False,
+            forward=forward,
+            reversed_order=reversed_order,
+        )
+    return PairwiseResult(
+        winner=None,
+        position_sensitive=True,
+        forward=forward,
+        reversed_order=reversed_order,
+    )
+
+
+def _reverse_preference(preference: Preference) -> Preference:
+    if preference == "A":
+        return "B"
+    if preference == "B":
+        return "A"
+    return "tie"
