@@ -1,0 +1,26 @@
+{
+  "artifact_type": "pricing_verification",
+  "provider": "deepseek",
+  "checked_at": "2026-08-21",
+  "source_url": "https://api-docs.deepseek.com/zh-cn/quick_start/pricing/",
+  "rate_basis": "peak",
+  "diff_status": "unchanged",
+  "compared_file": "configs/pricing/deepseek-2026-08-21.yaml",
+  "official_peak_rates_cny_per_million_tokens": {
+    "deepseek-v4-flash": {
+      "input_cache_hit": 0.1,
+      "input_cache_miss": 3.0,
+      "output": 9.0
+    },
+    "deepseek-v4-pro": {
+      "input_cache_hit": 0.3,
+      "input_cache_miss": 9.0,
+      "output": 27.0
+    }
+  },
+  "notes": [
+    "官方页面显示空闲时段为峰值价的一半。",
+    "价格逐项与代码中的日期化 pricing 文件一致，未更新成本常量。",
+    "本次核验与 preflight 均未发起网络模型请求。"
+  ]
+}

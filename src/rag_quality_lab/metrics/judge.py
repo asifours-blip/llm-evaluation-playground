@@ -73,9 +73,15 @@ def build_scalar_judge_prompt(
 
     evidence_text = "\n".join(evidence)
     return (
-        "Score the candidate from 1 to 5 for correctness and faithfulness. "
-        "Scores 4 and 5 pass. Use only the reference and evidence. Return JSON "
-        'with keys "score", "passed", and "reason".\n\n'
+        "Score the candidate from 1 to 5 for correctness and faithfulness using "
+        "only the reference and evidence. Score 5 only when it answers the question "
+        "and covers every core reference requirement. Score 4 only when it is mostly "
+        "correct with a minor omission. Score 3 for a partially correct answer with a "
+        "material omission. Score 2 when it is relevant but missing the central reference "
+        "requirement. Score 1 when it is wrong, unsupported, or refuses an answerable "
+        "question. A candidate missing the central reference requirement must not receive "
+        "a score of 4 or 5. Scores 4 and 5 pass. Return JSON with keys \"score\", "
+        '"passed", and "reason".\n\n'
         f"Question:\n{question}\n\nReference:\n{reference_answer}\n\n"
         f"Evidence:\n{evidence_text}\n\nCandidate:\n{candidate_answer}"
     )

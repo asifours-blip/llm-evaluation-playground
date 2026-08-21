@@ -1,0 +1,44 @@
+{
+  "artifact_type": "live_preflight",
+  "run_name": "deepseek-v4-flash-strict-judge",
+  "run_config": "configs/live-deepseek-flash-strict-judge.example.yaml",
+  "checked_at": "2026-08-21",
+  "purpose": "Corrected full benchmark after strict scalar-Judge rubric and non-null structured-answer contract changes.",
+  "pricing": {
+    "path": "configs/pricing/deepseek-2026-08-21.yaml",
+    "provider": "deepseek",
+    "rate_basis": "peak",
+    "verified_at": "2026-08-21",
+    "source_url": "https://api-docs.deepseek.com/zh-cn/quick_start/pricing/",
+    "diff_status": "unchanged"
+  },
+  "plan": {
+    "case_count": 48,
+    "retrieval_arms": 2,
+    "case_arms": 96,
+    "generation": {
+      "model": "deepseek-v4-flash",
+      "request_cap_per_case_arm": 6,
+      "input_token_cap": 10188,
+      "output_token_cap": 3072
+    },
+    "judge": {
+      "model": "deepseek-v4-flash",
+      "request_cap_per_case_arm": 6,
+      "input_token_cap": 12420,
+      "output_token_cap": 1536
+    },
+    "maximum_http_attempts": 1152
+  },
+  "cost_cny": {
+    "unbuffered": "10.492416",
+    "safety_multiplier": "1.25",
+    "buffered": "13.11552000",
+    "preflight_threshold": "18.000000",
+    "configured_hard_limit": "20.000000",
+    "execution_fuse_limit": "19.67328000",
+    "execution_fuse_basis": "1.5 * buffered preflight estimate"
+  },
+  "gate": "pass",
+  "next_action": "Requires the explicit confirmation phrase: 确认执行修复后真实 benchmark."
+}

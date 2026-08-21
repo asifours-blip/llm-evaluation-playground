@@ -1,0 +1,54 @@
+{
+  "artifact_type": "judge_human_calibration",
+  "experiment_id": "d212f35b-3482-4e52-9490-338be5520511",
+  "label_count": 12,
+  "metrics": {
+    "within_one_rate": 0.6666666666666666,
+    "within_one_count": 8,
+    "catastrophic_disagreement_count": 4,
+    "mean_signed_difference_human_minus_judge": 0.5833333333333334,
+    "weighted_kappa_quadratic": 0.04651162790697707
+  },
+  "gates": {
+    "within_one_rate": {
+      "required": ">= 0.90 (11/12)",
+      "passed": false
+    },
+    "catastrophic_disagreement_count": {
+      "required": "0",
+      "passed": false
+    },
+    "mean_signed_difference": {
+      "required": "abs(value) <= 0.5",
+      "passed": false
+    },
+    "weighted_kappa": {
+      "required": "report only; review if < 0.2 and other gates fail",
+      "value": 0.04651162790697707
+    }
+  },
+  "gate": "fail",
+  "gate_reasons": [
+    "within-one agreement 8/12 is below 11/12",
+    "catastrophic disagreements: 4",
+    "absolute mean signed difference 0.5833 exceeds 0.5"
+  ],
+  "escalations": [
+    {
+      "row": 1,
+      "difference": 2
+    },
+    {
+      "row": 2,
+      "difference": -2
+    },
+    {
+      "row": 7,
+      "difference": 4
+    },
+    {
+      "row": 11,
+      "difference": 4
+    }
+  ]
+}

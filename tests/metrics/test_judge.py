@@ -38,6 +38,20 @@ def test_scalar_prompt_contains_rubric_and_evidence() -> None:
     assert "score" in prompt
 
 
+def test_scalar_prompt_caps_scores_when_core_reference_content_is_missing() -> None:
+    prompt = build_scalar_judge_prompt(
+        question="How should a report diagnose failures?",
+        reference_answer="Report P50 and distinguish retrieval misses.",
+        candidate_answer="Store the commit SHA.",
+        evidence=["E"],
+    )
+
+    assert "Score 1" in prompt
+    assert "Score 2" in prompt
+    assert "missing the central reference requirement" in prompt
+    assert "must not receive a score of 4 or 5" in prompt
+
+
 def test_pairwise_resolution_normalizes_reversed_labels() -> None:
     result = resolve_pairwise(
         forward=PairwiseVerdict(preferred="A", reason="better"),

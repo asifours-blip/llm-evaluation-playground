@@ -175,6 +175,25 @@ def test_malformed_answer_gets_one_repair_attempt(
     assert len(session.calls) == 2
 
 
+def test_answer_contract_and_repair_forbid_null_answer(
+    make_provider: Callable[..., OpenAICompatibleProvider],
+) -> None:
+    session = FakeSession(
+        [
+            answer_response('{"answer":null,"citations":[],"abstained":false}'),
+            answer_response('{"answer":"fixed","citations":[],"abstained":false}'),
+        ]
+    )
+    provider = make_provider(session=session)
+
+    response = provider.answer("q", [], model="m")
+
+    assert response.parsed.answer == "fixed"
+    assert len(session.calls) == 2
+    assert "non-empty string" in session.calls[0]["json"]["messages"][0]["content"]
+    assert "must not be null" in session.calls[1]["json"]["messages"][1]["content"]
+
+
 def test_judge_returns_structured_verdict_and_usage(
     make_provider: Callable[..., OpenAICompatibleProvider],
 ) -> None:

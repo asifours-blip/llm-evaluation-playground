@@ -523,8 +523,9 @@ class OpenAICompatibleProvider:
     ) -> list[dict[str, str]]:
         context = "\n\n".join(contexts)
         system_message = instructions or (
-            "Answer only from the supplied context. Return JSON with answer, "
-            "citations, and abstained. Abstain when evidence is insufficient."
+            "Answer only from the supplied context. Return JSON with answer, citations, "
+            "and abstained. The answer must be a non-empty string and must not be null. "
+            "Abstain when evidence is insufficient."
         )
         return [
             {
@@ -547,8 +548,8 @@ class OpenAICompatibleProvider:
             {
                 "role": "user",
                 "content": (
-                    "Required keys: answer (string), citations (string array), "
-                    f"abstained (boolean). Content:\n{content}"
+                    "Required keys: answer (non-empty string; must not be null), citations "
+                    f"(string array), abstained (boolean). Content:\n{content}"
                 ),
             },
         ]
