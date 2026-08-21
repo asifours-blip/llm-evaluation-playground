@@ -23,3 +23,24 @@ def test_strict_judge_live_configuration_stays_under_budget() -> None:
 
     assert decision.allowed is True
     assert decision.buffered_cost < config.budget.hard_limit
+
+
+def test_384_live_configuration_stays_under_budget() -> None:
+    config = load_experiment_config(
+        ROOT / "configs" / "live-deepseek-flash-384.example.yaml"
+    )
+    dataset = load_dataset(config.dataset_path)
+    assert len(config.retrieval) == 8
+    assert config.provider.max_retries == 0
+    assert config.pricing_path is not None
+    plan = planned_calls(config, len(dataset.cases) * len(config.retrieval))
+    pricing = load_yaml_model(config.pricing_path, PricingConfig)
+    decision = preflight_budget(
+        planned=plan,
+        pricing=pricing,
+        budget=config.budget,
+    )
+
+    assert decision.allowed is True
+    assert sum(call.count * call.requests_per_case for call in plan) == 1536
+    assert decision.buffered_cost < config.budget.hard_limit
