@@ -22,7 +22,7 @@ Demo 只能说明“某次回答看起来能用”，不能定位错误来自检
 
 ## Q6：当前检索只有约 0.47 Recall@k，是不是项目效果很差？
 
-这是刻意保留的确定性哈希 embedding 弱基线，不是宣传指标。它的价值是让离线 CI 可重复、零成本，并证明报告会如实暴露弱检索，而不是让完美 mock 答案掩盖它。真实模型质量结论必须来自 M2 的生产 embedding/生成模型 benchmark。
+离线 Mock 的 Recall@k ≈ 0.47 是刻意保留的确定性哈希 embedding 弱基线，不是宣传指标。Live 96-arm / 384-arm 在同一哈希 embedding 下大约 0.69 / 0.64，仍然不能写成生产检索效果。它的价值是让离线 CI 可重复，并证明报告会如实暴露弱检索。要谈生产质量，必须换生产 embedding 再跑。
 
 ## Q7：如何保证实验可复现？
 
@@ -46,7 +46,13 @@ Judge 输出必须满足 1–5 分 schema，`passed` 与分数阈值强绑定。
 
 ## Q12：现在有 Judge 与人工一致率吗？
 
-有，但是小样本、带限定。`docs/artifacts/final-evidence-summary-2026-08-21.json` 记录了 12 条分层盲标（含 1 条边界复核）：within-one rate 100%、灾难性分歧 0、MAE ≈ 0.33，校准 gate 通过。面试应说“在 n=12 协议下通过了更严的人工校准门禁”，不能说成“Judge 已在大规模上可靠”或省略样本规模。
+有三份，都是 n=12，口径不同，面试必须分开讲：
+
+- 历史 final `544dcc6e`：分层盲标 + 1 条边界复核，within-one 100%、MAE ≈ 0.33。
+- HTTP-instrumented 96-arm `c4f32275`：含拒答/漏检等更有区分度的题，within-one 100%、MAE ≈ 0.083，**badge=final**，精确 HTTP 203。
+- 384-arm `72f6a56d`：门禁过了（exact/within-one 100%、MAE 0），但抽到的几乎全是 abstention / false-answer **定义题**，不能说成困难样本上 Judge 已可靠。
+
+正确说法：「n=12 协议下校准门禁通过；96-arm 那份更有区分度，384 那份证明规模和 HTTP 观测性。」禁止省略样本规模，也禁止把 384 的 100% 一致率单独拿去吹 Judge。
 
 ## Q13：为什么覆盖率只卡纯逻辑模块？
 
@@ -62,4 +68,8 @@ Fixture 只保存真实配置、提交的 384-case baseline 报告路径和规�
 
 ## Q16：如果继续做，优先级是什么？
 
-M2 主证据已具备（96-arm live + 12 条盲标校准）。下一步优先：① 在确认预算后，用已 instrument 的 HTTP 计数重跑 live，消掉历史 `http_request_count: null`；② 若要写 384-arm 付费结论，先跑 dated preflight 并显式确认；③ 需要对比句时用 `compare`/`pairwise` 产物，不手算。仪表盘、Docker 和多版本 CI 仍是展示增强，不能抢在新证据前面。
+M2 主证据已经在仓库里：HTTP-instrumented 96-arm final、384-arm final（校准样本偏易）、精确 HTTP 计数和预算闸门。下一步若还做：① 付费 `compare`/`pairwise` 才能写「相对 baseline 提升了多少」，禁止手算；② 若要加强 Judge 结论，对 384 再抽一轮困难盲标，而不是重跑整表；③ 换生产 embedding 再谈检索质量。仪表盘、Docker、多版本 CI 仍是展示增强。历史 `544dcc6e` 的 `http_request_count: null` 保持冻结，不改写。
+
+## Q17：96-arm final 和 384-arm final 怎么选着讲？
+
+96-arm（2 组检索配置）用来讲质量与校准：有拒答/漏检题，人工分有 1–5 的区分。384-arm（8 组配置）用来讲规模、预算和观测性：384/384、HTTP 817、成本 ¥0.66，低于 ¥20 硬顶。不要把 384 的检索 Recall@k 0.64 说成「比 96-arm 的 0.69 退步」——矩阵不同，没有 compare 产物就不能做对比句。

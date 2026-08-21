@@ -85,7 +85,7 @@ rag-quality run --config configs/live-deepseek.example.yaml --preflight-only
 rag-quality run --config configs/live-deepseek.example.yaml --confirm-live-run
 ```
 
-预检不读取 API Key、不发网络请求。示例包含 96 个 case-arm，每个生成/Judge 阶段都为主调用、一次结构修复和最多 2 次重试预留，因此最坏是 1,152 次 HTTP 尝试。聚合 token 上限下，峰值价未缓冲成本为 `¥10.492416`，1.25× 后为 `¥13.115520`，低于 `¥18` 启动阈值和 `¥20` 硬上限。价格会变化，真正运行前必须从[官方价格页](https://api-docs.deepseek.com/zh-cn/quick_start/pricing/)重新核验并新增日期化价格文件；历史证据不覆盖。
+预检不读取 API Key、不发网络请求。96-arm 示例为每个生成/Judge 阶段预留主调用、一次结构修复和最多 2 次重试，最坏 1,152 次 HTTP；峰值价未缓冲 `¥10.492416`，1.25× 后 `¥13.115520`。8 配置全矩阵示例见 [384 live 配置](configs/live-deepseek-flash-384.example.yaml)：`max_retries: 0`，预检最坏 1,536 次 HTTP，缓冲后 `¥17.487360`，仍低于 `¥18` 启动阈值和 `¥20` 硬上限。价格会变化，真正运行前必须从[官方价格页](https://api-docs.deepseek.com/zh-cn/quick_start/pricing/)重新核验并新增日期化价格文件；历史证据不覆盖。
 
 本次零网络结果已固化为 [2026-08-21 live preflight 证据](docs/artifacts/live-preflight-2026-08-21.json)，SHA-256 为 `56aafe9b0d3a9d68043cf200a9bffcda156d671d2e62172408bd34616770514d`。它证明预算与配置可执行，不是模型质量报告；没有 Key 时绝不能把它改名成 `live-final`。
 
