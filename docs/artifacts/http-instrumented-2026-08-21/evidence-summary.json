@@ -1,0 +1,47 @@
+{
+  "artifact_type": "http_instrumented_live_benchmark_evidence",
+  "run_date": "2026-08-21",
+  "experiment_id": "c4f32275-7d9a-4594-9043-5e61b52d3064",
+  "commit_sha": "d8303726a61a24e91b40414a753111bec360f9d5",
+  "dirty": false,
+  "config": "configs/live-deepseek-flash-strict-judge.example.yaml",
+  "model": "deepseek-v4-flash",
+  "case_arms": 96,
+  "completed_case_arms": 96,
+  "failed_case_arms": 0,
+  "badge_emitted": "pilot",
+  "http_request_count": 203,
+  "http_request_count_complete": true,
+  "http_request_count_min": 2,
+  "http_request_count_max": 3,
+  "http_request_count_mean": 2.1145833333333335,
+  "http_distribution": {
+    "2": 85,
+    "3": 11
+  },
+  "actual_cost_cny": "0.1735658",
+  "preflight_unbuffered_cost_cny": "10.492416",
+  "preflight_buffered_cost_cny": "13.11552000",
+  "preflight_max_http_attempts": 1152,
+  "quality": {
+    "retrieval_recall_at_k": 0.6944444444444444,
+    "retrieval_mrr": 0.5543981481481481,
+    "retrieval_context_hit_rate": 0.6111111111111112,
+    "judge_mean_score": 3.5104166666666665,
+    "judge_pass_rate": 0.6354166666666666,
+    "abstention_accuracy": 0.78125,
+    "false_answer_rate": 0.5416666666666666,
+    "answer_f1": 0.37520202907974876,
+    "p95_latency_ms": 6144.722199998796
+  },
+  "reports": {
+    "json": "docs\\artifacts\\http-instrumented-2026-08-21\\c4f32275-7d9a-4594-9043-5e61b52d3064.json",
+    "json_sha256": "0304e236b64fa317ef57fb3316c010a1c2f4c61f723a930e886d9a2f6b2b92b1",
+    "html": "docs\\artifacts\\http-instrumented-2026-08-21\\c4f32275-7d9a-4594-9043-5e61b52d3064.html",
+    "html_sha256": "9b0c38e79705a22e588732e899d4ab8c85cc3a9e727559a9da02574e4af0bbdb"
+  },
+  "final_badge_status": "blocked_pending_human_calibration",
+  "final_badge_note": "HTTP evidence is complete on this experiment. report --badge final still requires eligible human judge calibration on THIS experiment_id. A 12-row blind template was exported; historical labels from 544dcc6e must not be reused across experiments.",
+  "blind_label_template": "docs/artifacts/http-instrumented-2026-08-21/blind_label_template.jsonl",
+  "resume_claim_status": "http_observability_limit_cleared_for_new_runs; final_badge_awaits_n12_labels"
+}
