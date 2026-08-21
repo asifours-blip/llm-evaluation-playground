@@ -1,0 +1,10 @@
+{
+  "artifact_type": "aborted_partial_384_run",
+  "experiment_id": "3f42f3b6-e781-4776-9d38-20d6d7285d1b",
+  "status": "failed",
+  "completed_case_arms": 251,
+  "planned_case_arms": 384,
+  "approx_cost_cny": "0.5000306",
+  "reason": "user_interrupted; superseded by clean full rerun (plan A)",
+  "not_evidence_for_full_matrix": true
+}
