@@ -58,11 +58,12 @@ The runner stores the sum of generation and Judge counts for a completed case. F
 8. Reporting emits:
    - `http_request_count`: exact integer when every case total is known, otherwise `null`.
    - `http_request_count_complete`: boolean explaining whether aggregation is complete.
+9. Generating a new report with `badge=final` requires every case count to be known. A live run with incomplete transport evidence may still produce a pilot report.
 
 ## Backward compatibility
 
 - Pydantic defaults both new persisted fields to `None`, so old SQLite rows and JSON artifacts still load.
-- Existing final artifacts remain byte-for-byte unchanged and retain their explicit observability caveat.
+- Existing final artifact files remain byte-for-byte unchanged and retain their explicit observability caveat. Regenerating a historical uninstrumented experiment under the new code may produce a pilot report, but cannot mint a new `final` badge without exact request evidence.
 - Fake providers set `0`, preventing offline reports from becoming spuriously unknown.
 - Custom providers that have not adopted the field remain supported but cannot produce an exact aggregate.
 
@@ -87,6 +88,7 @@ Tests are written before production changes and must first fail because the fiel
 5. Runner isolated Judge failure: successful generation plus failed Judge attempts are preserved.
 6. Report aggregation: complete case counts produce an integer; any legacy/unknown case produces `null` and `http_request_count_complete=false`.
 7. SQLite round trip preserves the optional per-case field.
+8. Final gate: an otherwise eligible live experiment with an unknown case count is rejected, while pilot generation remains allowed.
 
 After focused tests pass, run Ruff, strict mypy, the complete 111+ test suite, focused coverage at 90% or higher, and the deterministic regression gate.
 

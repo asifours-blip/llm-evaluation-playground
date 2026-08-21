@@ -270,9 +270,47 @@ git add -- README.md
 git commit -m "docs: explain HTTP attempt observability"
 ```
 
+### Task 5: Post-review final-evidence hardening
+
+**Files:**
+- Modify: `tests/reporting/test_report.py`
+- Modify: `src/rag_quality_lab/reporting/report.py`
+
+- [ ] **Step 1: Write a failing final-gate test**
+
+Create an otherwise eligible live experiment, set its case `http_request_count` to `None`, provide eligible 12-label calibration, and assert `generate_reports(..., badge="final")` raises a `ValueError` mentioning HTTP request evidence. Verify that the same experiment still generates a pilot report.
+
+- [ ] **Step 2: Run the focused test and verify RED**
+
+```powershell
+python -m pytest tests/reporting/test_report.py::test_final_report_requires_complete_http_request_evidence -q
+```
+
+Expected: FAIL because current final validation does not reject the unknown count.
+
+- [ ] **Step 3: Add the minimal final gate**
+
+Extend `_validate_final_evidence`:
+
+```python
+if any(result.http_request_count is None for result in experiment.case_results):
+    raise ValueError("final evidence requires complete HTTP request counts")
+```
+
+- [ ] **Step 4: Verify focused and full quality gates**
+
+Run the report tests, Ruff, strict mypy, all tests, focused coverage, and offline regression commands from Task 4. Expected: every gate passes.
+
+- [ ] **Step 5: Commit the review fix**
+
+```powershell
+git add -- tests/reporting/test_report.py src/rag_quality_lab/reporting/report.py docs/superpowers/specs/2026-08-21-http-attempt-observability-design.md docs/superpowers/plans/2026-08-21-http-attempt-observability.md
+git commit -m "fix: require HTTP evidence for final reports"
+```
+
 ## Plan self-review
 
-- Every design requirement maps to a task and a focused test.
+- Every design requirement maps to a task and a focused test, including the post-review final gate.
 - Field names are consistent: `http_request_count` and `http_request_count_complete`.
-- Unknown and zero remain distinct through provider, runner, SQLite, and report layers.
+- Unknown and zero remain distinct through provider, runner, SQLite, report, and final-evidence validation layers.
 - No paid call, matrix expansion, unrelated refactor, or historical artifact rewrite is included.
