@@ -52,6 +52,7 @@ def example_case_result() -> CaseResult:
         ],
         metrics={"recall_at_k": 1.0, "answer_f1": 1.0},
         usage=TokenUsage(input_tokens=10, output_tokens=4),
+        http_request_count=3,
         latency_ms=12.5,
         cost=Decimal("0.0001"),
         status="completed",
@@ -92,6 +93,7 @@ def test_completed_experiment_round_trips_typed_results(tmp_path: Path) -> None:
     assert len(loaded.case_results) == 1
     assert loaded.case_results[0].answer is not None
     assert loaded.case_results[0].answer.citations == ["doc-01"]
+    assert loaded.case_results[0].http_request_count == 3
     assert loaded.case_results[0].cost == Decimal("0.0001")
     assert loaded.summary == {"answer_f1": 1.0}
 

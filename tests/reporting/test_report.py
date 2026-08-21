@@ -61,6 +61,7 @@ def example_experiment() -> ExperimentRecord:
                 judge=JudgeVerdict(score=5, passed=True, reason="supported"),
                 judge_model="fake-judge",
                 judge_usage=TokenUsage(input_tokens=5, output_tokens=2),
+                http_request_count=3,
                 latency_ms=12.5,
                 cost=Decimal("0.0001"),
                 status="completed",
@@ -84,8 +85,11 @@ def test_report_exposes_identity_quality_cost_and_failures(tmp_path: Path) -> No
     assert payload["summary"]["false_answer_rate"] == 0.0
     assert payload["system"]["p95_latency_ms"] == 12.5
     assert payload["system"]["total_tokens"] == 21
+    assert payload["system"]["http_request_count"] == 3
+    assert payload["system"]["http_request_count_complete"] is True
     assert payload["category_breakdown"]["retrieval"]["answer_f1"] == 1.0
     assert "P95 latency" in html
+    assert "HTTP requests" in html
     assert "MOCK" in html
     assert "Retrieved evidence" in html
     assert "doc-01#chunk-000" in html
@@ -93,6 +97,19 @@ def test_report_exposes_identity_quality_cost_and_failures(tmp_path: Path) -> No
     assert all(line == line.rstrip() for line in html.splitlines())
     assert paths.json_sha256 == hashlib.sha256(paths.json.read_bytes()).hexdigest()
     assert paths.html_sha256 == hashlib.sha256(paths.html.read_bytes()).hexdigest()
+
+
+def test_report_marks_legacy_http_request_count_unknown(tmp_path: Path) -> None:
+    experiment = example_experiment()
+    experiment.case_results[0].http_request_count = None
+
+    paths = generate_reports(experiment, tmp_path)
+    payload = json.loads(paths.json.read_text(encoding="utf-8"))
+    html = paths.html.read_text(encoding="utf-8")
+
+    assert payload["system"]["http_request_count"] is None
+    assert payload["system"]["http_request_count_complete"] is False
+    assert "unknown" in html
 
 
 def test_live_report_defaults_to_pilot_not_final(tmp_path: Path) -> None:

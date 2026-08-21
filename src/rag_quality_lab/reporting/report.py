@@ -123,7 +123,9 @@ def _report_payload(
     }
 
 
-def _system_metrics(results: Sequence[CaseResult]) -> dict[str, float | int]:
+def _system_metrics(
+    results: Sequence[CaseResult],
+) -> dict[str, float | int | bool | None]:
     latencies = [result.latency_ms for result in results if result.status == "completed"]
     usages = [
         usage
@@ -131,6 +133,8 @@ def _system_metrics(results: Sequence[CaseResult]) -> dict[str, float | int]:
         for usage in (result.usage, result.judge_usage)
         if usage is not None
     ]
+    request_counts = [result.http_request_count for result in results]
+    request_count_complete = all(count is not None for count in request_counts)
     return {
         "mean_latency_ms": statistics.fmean(latencies) if latencies else 0.0,
         "p50_latency_ms": statistics.median(latencies) if latencies else 0.0,
@@ -140,6 +144,12 @@ def _system_metrics(results: Sequence[CaseResult]) -> dict[str, float | int]:
         "total_tokens": sum(usage.total_tokens for usage in usages),
         "total_cost": float(sum(result.cost for result in results)),
         "failure_count": sum(result.status != "completed" for result in results),
+        "http_request_count": (
+            sum(count for count in request_counts if count is not None)
+            if request_count_complete
+            else None
+        ),
+        "http_request_count_complete": request_count_complete,
     }
 
 

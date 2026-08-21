@@ -52,6 +52,7 @@
     <div class="card"><div class="muted">P95 latency</div><div class="value">{{ report.system.p95_latency_ms }} ms</div></div>
     <div class="card"><div class="muted">Total tokens</div><div class="value">{{ report.system.total_tokens }}</div></div>
     <div class="card"><div class="muted">Total cost</div><div class="value">{{ report.system.total_cost }}</div></div>
+    <div class="card"><div class="muted">HTTP requests</div><div class="value">{% if report.system.http_request_count_complete %}{{ report.system.http_request_count }}{% else %}unknown{% endif %}</div></div>
   </div>
 
   <h2>Category breakdown</h2>
