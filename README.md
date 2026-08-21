@@ -87,6 +87,8 @@ rag-quality run --config configs/live-deepseek.example.yaml --confirm-live-run
 
 预检不读取 API Key、不发网络请求。示例包含 96 次生成（每次上限 2,500 输入、512 输出 token）和 96 次 Judge（2,000 输入、256 输出）：未缓冲成本 `¥1.959552`、1.25× 缓冲成本 `¥2.449440`，低于 `¥18` 预检阈值和 `¥20` 硬上限。价格会变化，真正运行前必须从[官方价格页](https://api-docs.deepseek.com/zh-cn/quick_start/pricing/)重新核验并新增日期化价格文件；历史证据不覆盖。
 
+本次零网络结果已固化为 [2026-08-21 live preflight 证据](docs/artifacts/live-preflight-2026-08-21.json)，SHA-256 为 `4df2e91cde6f95a6adb52d04e6377bede73433516ddaeae40833a9b264c16a4e`。它证明预算与配置可执行，不是模型质量报告；没有 Key 时绝不能把它改名成 `live-final`。
+
 ## Judge 人工盲标
 
 Live 实验会分别保存生成与 Judge 的 model、usage 和合并成本。下面的导出文件物理移除模型名、配置名和 Judge 分数；sample key 使用 `case_id::config_id`，避免同一道题在多组配置下错配：
