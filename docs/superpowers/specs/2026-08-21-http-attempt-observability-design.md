@@ -36,9 +36,9 @@ A global counter cannot reliably attribute attempts to concurrent case arms. Sam
 
 `ProviderError` gains:
 
-- `http_request_count: int = 0`
+- `http_request_count: int | None = None`
 
-The OpenAI-compatible public operations overwrite this value from their local counter before re-raising a provider error. This covers exhausted retries, authentication failures, invalid provider payloads, and a failed repair call without leaking the API key.
+The OpenAI-compatible transport and parsing paths set this value from their local counter before raising a provider error. An error raised by an uninstrumented third-party provider remains unknown instead of being misreported as zero. This covers exhausted retries, authentication failures, invalid provider payloads, and a failed repair call without leaking the API key.
 
 `CaseResult` gains:
 

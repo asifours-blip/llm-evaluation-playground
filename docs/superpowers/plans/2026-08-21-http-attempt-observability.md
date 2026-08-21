@@ -110,7 +110,7 @@ def _observe_http_requests() -> Iterator[_RequestCounter]:
         raise
 ```
 
-`ProviderError.__init__` accepts `http_request_count: int = 0`. Each `answer`, `judge`, `pairwise`, and `embed` operation opens an observation scope. `_chat_completion` and `_post_json` accept the counter, and `_post_json` executes `counter.count += 1` immediately before `session.post`. Successful typed responses set `http_request_count=counter.count`. Fake chat and Judge responses set `http_request_count=0`.
+`ProviderError.__init__` accepts `http_request_count: int | None = None`; only instrumented OpenAI-compatible error paths fill it. Each `answer`, `judge`, `pairwise`, and `embed` operation opens an observation scope. `_chat_completion` and `_post_json` accept the counter, and `_post_json` executes `counter.count += 1` immediately before `session.post`. Successful typed responses set `http_request_count=counter.count`. Fake chat and Judge responses set `http_request_count=0`.
 
 - [ ] **Step 4: Run focused tests and verify GREEN**
 
