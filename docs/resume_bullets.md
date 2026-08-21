@@ -1,6 +1,6 @@
 # Resume Evidence Ledger
 
-简历只能使用下列“已验证”表述。所有数字都能回到 [离线 JSON](artifacts/offline-summary.json)、[离线 HTML](artifacts/offline-report.html) 或 CI 配置。标为 M2 的模板在真实 live 与人工证据产生前禁止填写。
+简历只能使用下列“已验证”表述。所有数字都能回到对应 JSON/HTML 产物或 CI 配置。M2 数字必须带样本规模、哈希 embedding 和 HTTP 观测性限定。
 
 ## 中文：当前可用（M1 软件工程证据）
 

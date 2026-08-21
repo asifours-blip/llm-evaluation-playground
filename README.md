@@ -128,9 +128,9 @@ rag-quality regression --fixture tests/fixtures/offline_baseline.json
 ## 局限
 
 - 哈希 embedding 故意只作为便宜、可复现的检索弱基线；不能代表生产 embedding。
-- 当前公开产物是 Mock，答案分数不可用于比较真实 LLM。
+- 离线公开产物仍是 Mock，答案分数不可用于比较真实 LLM。Live 数字必须引用对应 final 报告，且检索仍是哈希 embedding 弱基线。
 - 48 题适合回归与面试讲解，不足以形成广泛统计结论。
-- Judge 执行、双顺序比较、盲标快照校验和校准门禁均可执行；历史 n=12 严格盲标校准通过，但样本小，不能外推为大规模 Judge 可靠性。历史 final 缺少精确 HTTP 尝试计数；HTTP-instrumented 重跑已具备完整计数，但 final 仍须绑定**同一 experiment** 的人工校准。
+- Judge 校准是 n=12：96-arm 有区分度，384-arm 偏易定义题；都不能外推为大规模 Judge 可靠性。历史 `544dcc6e` 缺少精确 HTTP 计数；新 final 必须绑定**同一 experiment** 的完整 HTTP 计数与人工校准。
 - SQLite 适合本地单写实验；高吞吐多写场景应迁移到服务型数据库。
 
 可核验的简历表述与禁用表述见 [简历证据清单](docs/resume_bullets.md)，面试追问见 [Interview Q&A](docs/interview_qa.md)。
