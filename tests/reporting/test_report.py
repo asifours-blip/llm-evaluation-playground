@@ -1,3 +1,4 @@
+import hashlib
 import json
 from decimal import Decimal
 from pathlib import Path
@@ -82,6 +83,9 @@ def test_report_exposes_identity_quality_cost_and_failures(tmp_path: Path) -> No
     assert "Retrieved evidence" in html
     assert "doc-01#chunk-000" in html
     assert "http://" not in html and "https://" not in html
+    assert all(line == line.rstrip() for line in html.splitlines())
+    assert paths.json_sha256 == hashlib.sha256(paths.json.read_bytes()).hexdigest()
+    assert paths.html_sha256 == hashlib.sha256(paths.html.read_bytes()).hexdigest()
 
 
 def test_live_report_defaults_to_pilot_not_final(tmp_path: Path) -> None:

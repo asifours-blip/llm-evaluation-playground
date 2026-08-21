@@ -58,15 +58,16 @@ def generate_reports(
         sort_keys=True,
         separators=(",", ":"),
     ) + "\n"
-    json_path.write_text(json_text, encoding="utf-8")
+    json_path.write_text(json_text, encoding="utf-8", newline="\n")
 
     template_dir = Path(__file__).parent / "templates"
     environment = Environment(
         loader=FileSystemLoader(template_dir),
         autoescape=select_autoescape(enabled_extensions=("html", "jinja2")),
     )
-    html_text = environment.get_template("report.html.jinja2").render(report=payload)
-    html_path.write_text(html_text, encoding="utf-8")
+    rendered_html = environment.get_template("report.html.jinja2").render(report=payload)
+    html_text = "\n".join(line.rstrip() for line in rendered_html.splitlines()) + "\n"
+    html_path.write_text(html_text, encoding="utf-8", newline="\n")
     return ReportPaths(
         json=json_path,
         html=html_path,

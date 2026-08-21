@@ -18,7 +18,7 @@ M1 离线闭环已完成。当前提交附带一份由 commit `57ae92eb0e8953f8f
 | 成本 | ¥0 | 离线运行不读取 API Key、不发网络请求 |
 | 纯逻辑覆盖率 | 97.49% | 领域、配置、指标、预算、回归模块；网络胶水不靠 mock 覆盖率撑门面 |
 
-可直接检查 [离线 HTML 报告](docs/artifacts/offline-report.html) 和 [规范化 JSON 产物](docs/artifacts/offline-summary.json)。JSON 与 HTML 的 SHA-256 分别为 `b0e0746f4fcf71fda8545209f1686e74115c33c82701ede638c5af7adf62adeb`、`7a63ac4d0fee402cf48a1a1c81d69614e1e62e53519cd51b384d862f93e77a40`。
+可直接检查 [离线 HTML 报告](docs/artifacts/offline-report.html) 和 [规范化 JSON 产物](docs/artifacts/offline-summary.json)。JSON 与 HTML 的 SHA-256 分别为 `d759dd887e65220123e01d52962a48c96374ca0963647efdcf04abf15231c8e5`、`81385f0ec00dcd77de21a0ae2e0b9f9a31f6cff77518ad404f338ad964162c52`。
 
 M2 尚未伪装成完成：仓库没有提交付费 live benchmark，也没有人类填写的 12 条盲标，因此没有发布“模型质量提升”或“Judge 与人工一致率”数字。相关命令、预算闸门和校准逻辑已经具备，外部证据完成后才能升级简历结论。
 
