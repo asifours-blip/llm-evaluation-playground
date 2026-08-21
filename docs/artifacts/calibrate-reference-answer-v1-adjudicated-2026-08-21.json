@@ -1,0 +1,24 @@
+{
+  "artifact_type": "judge_human_calibration",
+  "protocol": "reference-answer-v1-adjudicated",
+  "experiment_id": "d212f35b-3482-4e52-9490-338be5520511",
+  "label_count": 12,
+  "selected_adjudication": "docs/artifacts/calibration-adjudication-2026-08-21.json",
+  "metrics": {
+    "within_one_rate": 0.9166666666666666,
+    "within_one_count": 11,
+    "catastrophic_disagreement_count": 1,
+    "mean_signed_difference_human_minus_judge": -0.08333333333333333,
+    "weighted_kappa_quadratic": 0.918032786885246
+  },
+  "gate": "fail",
+  "gate_reasons": [
+    "catastrophic disagreements: 1"
+  ],
+  "escalations": [
+    {
+      "row": 2,
+      "difference": -2
+    }
+  ]
+}

@@ -1,0 +1,2 @@
+docs/artifacts/*.json text eol=lf
+docs/artifacts/*.html text eol=lf

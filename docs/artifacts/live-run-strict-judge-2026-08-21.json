@@ -1,0 +1,49 @@
+{
+  "artifact_type": "live_benchmark_run",
+  "run_date": "2026-08-21",
+  "experiment_id": "544dcc6e-b60d-4bd1-bde0-8c8bb89c3508",
+  "status": "completed",
+  "commit_sha": "66bcab4",
+  "pricing_evidence": {
+    "pricing_path": "configs/pricing/deepseek-2026-08-21.yaml",
+    "pricing_rate_basis": "peak",
+    "pricing_verified_at": "2026-08-21",
+    "pricing_source_url": "https://api-docs.deepseek.com/zh-cn/quick_start/pricing/"
+  },
+  "preflight": {
+    "unbuffered_cost_cny": "10.492416",
+    "buffered_cost_cny": "13.11552000",
+    "maximum_http_attempts": 1152,
+    "gate": "pass"
+  },
+  "execution_guardrails": {
+    "configured_hard_budget_cny": "20.000000",
+    "execution_fuse_limit_cny": "19.673280",
+    "execution_fuse_basis": "1.5 * buffered preflight estimate",
+    "request_input_output_caps": "enabled",
+    "budget_fuse_triggered": false
+  },
+  "actuals": {
+    "case_arms": 96,
+    "completed_case_arms": 96,
+    "isolated_failed_case_arms": 0,
+    "cost_cny": "0.2820596",
+    "cost_estimated_case_arms": 0,
+    "vs_preflight_unbuffered_percent": "-97.3118",
+    "confirmed_completed_provider_operations": 192,
+    "actual_http_request_count": null,
+    "actual_http_request_count_note": "The current persisted schema aggregates per-operation token usage and does not retain physical request-attempt counts after a response-repair or HTTP retry. It can confirm 96 generation and 96 judge operations, with a preflight upper bound of 1152 HTTP attempts; an exact HTTP-attempt count must not be inferred from these records.",
+    "gate": "pass"
+  },
+  "quality_summary": {
+    "retrieval_recall_at_k": 0.6944444444444444,
+    "retrieval_mrr": 0.5543981481481481,
+    "retrieval_context_hit_rate": 0.6111111111111112,
+    "judge_mean_score": 3.4583333333333335,
+    "judge_pass_rate": 0.6145833333333334,
+    "abstention_accuracy": 0.7916666666666666,
+    "false_answer_rate": 0.5416666666666666
+  },
+  "source_report": "artifacts/live-deepseek-flash-strict-judge/544dcc6e-b60d-4bd1-bde0-8c8bb89c3508.json",
+  "next_gate": "Independent 12-row holdout calibration under the reference-answer-v1 protocol."
+}

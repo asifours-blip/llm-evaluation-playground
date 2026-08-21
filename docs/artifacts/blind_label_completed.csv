@@ -1,0 +1,716 @@
+﻿prompt,output,context,human_score,reason
+How do reproducibility metadata and the RAG stage model complement each other?,"Reproducibility metadata and the RAG stage model complement each other by addressing different aspects of trustworthiness: reproducibility metadata ensures that the exact model version and data are recorded, while the RAG stage model provides a structured framework for retrieval and generation. However, the provided context does not explicitly describe how they complement each other.","
+## Trade-offs
+
+RAG can update knowledge without retraining the generator, but it adds retrieval latency and another source of failure.
+
+## Example
+
+A support assistant retrieves two product-policy passages and cites them in its response.
+
+## Limitations
+
+RAG does not guarantee correctness when the 
+
+---
+
+record.
+
+## Limitations
+
+Reproducibility metadata cannot compensate for a provider that silently changes a model behind the same identifier.
+
+
+---
+
+# Grounded Prompting
+
+ID: doc-07
+
+## Definition
+
+A grounded prompt tells the model to answer only from supplied evidence and to cite stable document IDs.
+The evidence-first variant asks the model to list supporting facts before composing the final answer.
+
+## Trade-offs
+
+More instructions can improv
+
+---
+
+ions
+
+RAG does not guarantee correctness when the corpus is incomplete, retrieval misses evidence, or the generator ignores context.
+",4,答案承认 context 未明确说明互补机制，基本诚实，但“分别保障…”的表述略带自行归纳，非 context 直接给出。
+How should an experiment connect performance reporting with failure diagnosis?,"Connect performance reporting with failure diagnosis by writing case results first, then generating static JSON and HTML reports from the committed experiment record, ensuring that the report includes the commit SHA, dataset hash, prompt hash, configuration, model IDs, and random seed for reproducibility.","# Reproducible Deployment
+
+ID: doc-12
+
+## Definition
+
+A reproducible run records the commit SHA, dataset hash, prompt hash, configuration, model IDs, and random seed.
+SQLite WAL mode lets readers continue while a coordinator serializes experiment writes.
+
+## Trade-offs
+
+Local SQLite keeps deployment simple, but it is not a substitute for a distributed high-write database.
+
+## Example
+
+The runner writes case results first, then generates static JSON and HTML reports from the committed experiment record.
+
+## Limitations
+
+Reproducibility metadata cannot compensate for a provider that silently cha
+
+---
+
+# Document Ingestion
+
+ID: doc-02
+
+## Definition
+
+Ingestion converts source files into normalized documents with stable IDs and metadata.
+A content hash detects changes without depending on file modification times.
+
+## Trade-offs
+
+Strict normalization improves reproducibility, but aggressive cleanup can remove tables, headings, or other useful structure.
+
+## Example
+
+An ingestion job stores the source path, document ID, title, and SHA-256 content hash for every Markdown file.
+
+## Limitations
+
+Parsing rules are format-specific, and scanned documents require a separate OCR step.
+
+
+---
+
+cannot compensate for a provider that silently changes a model behind the same identifier.
+
+
+---
+
+# Candidate Reranking
+
+ID: doc-06
+
+## Definition
+
+A reranker reorders a small candidate set using a query-document relevance model.
+Reranking improves precision only when the first-stage retriever already includes useful evidence.
+
+## Trade-offs
+
+Cross-encoder rerankers inspect query-document pairs more deeply, but add one scoring operation per candidate.
+
+## Example
+
+A retriever returns 20 chunks, a reranker scores those 20, and the prompt receives the best 4.
+
+## Limitations
+
+A reranker cannot recover a relevant document that was absent from the candidate set.
+",2,答案编造了“先…再…”的具体流程及“JSON/HTML报告”“已提交实验记录”等细节，context 中并未出现这些具体表述，属于过度演绎/虚构，未真正回答“如何连接”的问题。
+How many GPUs are installed in the evaluation server?,The context does not specify the number of GPUs installed in the evaluation server.,"# RAG Evaluation
+
+ID: doc-08
+
+## Definition
+
+Retrieval metrics and generation metrics must be reported separately to localize failures.
+MRR rewards systems that place the first relevant result near the top of the ranking.
+
+## Trade-offs
+
+Reference metrics are repeatable and cheap, while model judges cover nuance but introduce cost and evaluator bias.
+
+## Example
+
+A run can have high Recall@5 and low answer correctness, showing that generation failed despite available evidence.
+
+## Limitations
+
+Aggregate scores hide case-level regressions unless reports preserve individual outcomes.
+
+
+---
+
+# Grounded Prompting
+
+ID: doc-07
+
+## Definition
+
+A grounded prompt tells the model to answer only from supplied evidence and to cite stable document IDs.
+The evidence-first variant asks the model to list supporting facts before composing the final answer.
+
+## Trade-offs
+
+More instructions can improve format adherence, but they consume context and may conflict with one another.
+
+## Example
+
+The response contract contains an answer string, a citation list, and an abstained boolean.
+
+## Limitations
+
+Prompt instructions reduce unsupported answers but do not provide a hard factual guarantee.
+
+
+---
+
+# Embeddings and Caching
+
+ID: doc-04
+
+## Definition
+
+An embedding maps text to a numeric vector so semantic similarity can be computed.
+Embedding caches must include the model name, normalized text hash, and preprocessing version in the key.
+
+## Trade-offs
+
+Larger embedding models may improve semantic separation, but they increase latency, storage, and migration cost.
+
+## Example
+
+The vector for a cached chunk is reused only when both its text hash and embedding-model identifier match.
+
+## Limitations
+
+Cosine similarity reflects vector geometry, not factual correctness or permission to answer.
+
+---
+
+# Candidate Reranking
+
+ID: doc-06
+
+## Definition
+
+A reranker reorders a small candidate set using a query-document relevance model.
+Reranking improves precision only when the first-stage retriever already includes useful evidence.
+
+## Trade-offs
+
+Cross-encoder rerankers inspect query-document pairs more deeply, but add one scoring operation per candidate.
+
+## Example
+
+A retriever returns 20 chunks, a reranker scores those 20, and the prompt receives the best 4.
+
+## Limitations
+
+A reranker cannot recover a relevant document that was absent from the candidate set.
+",5,context 确实无 GPU 信息，正确拒答。
+Which embedding model achieved the best score in the benchmark?,The context does not provide information about which embedding model achieved the best score in the benchmark.,"# Embeddings and Caching
+
+ID: doc-04
+
+## Definition
+
+An embedding maps text to a numeric vector so semantic similarity can be computed.
+Embedding caches must include the model name, normalized text hash, and preprocessing version in the key.
+
+## Trade-offs
+
+Larger embedding models may improve semantic separation, but they increase latency, storage, and migration cost.
+
+## Example
+
+The vector for a cached chunk is reused only when both its text hash and embedding-model identifier match.
+
+## Limitations
+
+Cosine similarity reflects vector geometry, not factual correctness or permission to answer.
+
+---
+
+# Grounded Prompting
+
+ID: doc-07
+
+## Definition
+
+A grounded prompt tells the model to answer only from supplied evidence and to cite stable document IDs.
+The evidence-first variant asks the model to list supporting facts before composing the final answer.
+
+## Trade-offs
+
+More instructions can improve format adherence, but they consume context and may conflict with one another.
+
+## Example
+
+The response contract contains an answer string, a citation list, and an abstained boolean.
+
+## Limitations
+
+Prompt instructions reduce unsupported answers but do not provide a hard factual guarantee.
+
+
+---
+
+cannot compensate for a provider that silently changes a model behind the same identifier.
+
+
+---
+
+# Reproducible Deployment
+
+ID: doc-12
+
+## Definition
+
+A reproducible run records the commit SHA, dataset hash, prompt hash, configuration, model IDs, and random seed.
+SQLite WAL mode lets readers continue while a coordinator serializes experiment writes.
+
+## Trade-offs
+
+Local SQLite keeps deployment simple, but it is not a substitute for a distributed high-write database.
+
+## Example
+
+The runner writes case results first, then generates static JSON and HTML reports from the committed experiment record.
+
+## Limitations
+
+Reproducibility metadata cannot compensate for a provider that silently cha",5,context 无 benchmark 排名信息，正确拒答。
+What production answer accuracy has this system proven?,The context does not provide any information about the production answer accuracy of the system.,"# Grounded Prompting
+
+ID: doc-07
+
+## Definition
+
+A grounded prompt tells the model to answer only from supplied evidence and to cite stable document IDs.
+The evidence-first variant asks the model to list supporting facts before composing the final answer.
+
+## Trade-offs
+
+More instructions can improv
+
+---
+
+rue.
+
+## Limitations
+
+String matching alone cannot reliably distinguish a cautious answer from a real abstention.
+
+
+---
+
+record.
+
+## Limitations
+
+Reproducibility metadata cannot compensate for a provider that silently changes a model behind the same identifier.
+
+
+---
+
+rade-offs
+
+Aggressive abstention reduces hallucinations but can reject answerable questions, so over-abstention must also be measured.
+
+## Example
+
+For an unsupported pricing question, the system returns an empty citation list and sets abstained to true.
+
+## Limitations
+
+String matching alone cannot",5,context 无生产准确率信息，正确拒答。
+What does abstention mean in this evaluation?,Abstention means explicitly declining to answer when the controlled corpus lacks sufficient evidence.,"# Abstention Evaluation
+
+ID: doc-09
+
+## Definition
+
+Abstention means explicitly declining to answer when the controlled corpus lacks sufficient evidence.
+False-answer rate is the fraction of unanswerable cases that receive a substantive answer.
+
+## Trade-offs
+
+Aggressive abstention reduces hallucina
+
+---
+
+ggregate scores hide case-level regressions unless reports preserve individual outcomes.
+
+
+---
+
+rade-offs
+
+Aggressive abstention reduces hallucinations but can reject answerable questions, so over-abstention must also be measured.
+
+## Example
+
+For an unsupported pricing question, the system returns an empty citation list and sets abstained to true.
+
+## Limitations
+
+String matching alone cannot
+
+---
+
+
+## Trade-offs
+
+RAG can update knowledge without retraining the generator, but it adds retrieval latency and another source of failure.
+
+## Example
+
+A support assistant retrieves two product-policy passages and cites them in its response.
+
+## Limitations
+
+RAG does not guarantee correctness when the ",5,与 context 定义一致。
+What is chunking in a RAG pipeline?,The provided context does not contain information about chunking in a RAG pipeline.,"# RAG System Overview
+
+ID: doc-01
+
+## Definition
+
+Retrieval-augmented generation (RAG) retrieves external evidence before an LLM writes an answer.
+A RAG request normally includes ingestion, retrieval, prompt construction, generation, and evaluation.
+
+## Trade-offs
+
+RAG can update knowledge without r
+
+---
+
+
+
+Prompt instructions reduce unsupported answers but do not provide a hard factual guarantee.
+
+
+---
+
+# Candidate Reranking
+
+ID: doc-06
+
+## Definition
+
+A reranker reorders a small candidate set using a query-document relevance model.
+Reranking improves precision only when the first-stage retriever already includes useful evidence.
+
+## Trade-offs
+
+Cross-encoder rerankers inspect query-document pairs 
+
+---
+
+tes.
+
+## Trade-offs
+
+Local SQLite keeps deployment simple, but it is not a substitute for a distributed high-write database.
+
+## Example
+
+The runner writes case results first, then generates static JSON and HTML reports from the committed experiment record.
+
+## Limitations
+
+Reproducibility metadata ",5,context 检索片段确无 chunking 定义，正确拒答。
+What does an embedding enable a system to compute?,An embedding enables a system to compute semantic similarity between texts by mapping text to a numeric vector.,"cannot compensate for a provider that silently changes a model behind the same identifier.
+
+
+---
+
+# Embeddings and Caching
+
+ID: doc-04
+
+## Definition
+
+An embedding maps text to a numeric vector so semantic similarity can be computed.
+Embedding caches must include the model name, normalized text hash, and preprocessing version in the key.
+
+## Trade-offs
+
+Larger embedding models may improve semantic separation, but they increase latency, storage, and migration cost.
+
+## Example
+
+The vector for a cached chunk is reused only when both its text hash and embedding-model identifier match.
+
+## Limitations
+
+Cosine similarity reflects vector geometry, not factual correctness or permission to answer.
+
+---
+
+ reliably distinguish a cautious answer from a real abstention.
+
+
+---
+
+# Reproducible Deployment
+
+ID: doc-12
+
+## Definition
+
+A reproducible run records the commit SHA, dataset hash, prompt hash, configuration, model IDs, and random seed.
+SQLite WAL mode lets readers continue while a coordinator serializes experiment writes.
+
+## Trade-offs
+
+Local SQLite keeps deployment simple, but it is not a substitute for a distributed high-write database.
+
+## Example
+
+The runner writes case results first, then generates static JSON and HTML reports from the committed experiment record.
+
+## Limitations
+
+Reproducibility metadata cannot compensate for a provider that silently cha",4,基本正确，但“映射为数值向量”是补充细节，context 明确给出的只是计算语义相似度这一点。
+What behavior does MRR reward?,MRR rewards systems that place the first relevant result near the top of the ranking.,"# Reproducible Deployment
+
+ID: doc-12
+
+## Definition
+
+A reproducible run records the commit SHA, dataset hash, prompt hash, configuration, model IDs, and random seed.
+SQLite WAL mode lets readers continue while a coordinator serializes experiment writes.
+
+## Trade-offs
+
+Local SQLite keeps deployment
+
+---
+
+# RAG Evaluation
+
+ID: doc-08
+
+## Definition
+
+Retrieval metrics and generation metrics must be reported separately to localize failures.
+MRR rewards systems that place the first relevant result near the top of the ranking.
+
+## Trade-offs
+
+Reference metrics are repeatable and cheap, while model judges
+
+---
+
+ions
+
+RAG does not guarantee correctness when the corpus is incomplete, retrieval misses evidence, or the generator ignores context.
+
+
+---
+
+
+## Trade-offs
+
+RAG can update knowledge without retraining the generator, but it adds retrieval latency and another source of failure.
+
+## Example
+
+A support assistant retrieves two product-policy passages and cites them in its response.
+
+## Limitations
+
+RAG does not guarantee correctness when the ",5,与 context 定义一致。
+What is a retrieval miss?,A retrieval miss occurs when expected evidence is absent from the retrieved context.,"# Failure Taxonomy
+
+ID: doc-11
+
+## Definition
+
+A retrieval miss occurs when expected evidence is absent from the retrieved context.
+A generation failure occurs when evidence is present but the answer is incorrect, unsupported, or malformed.
+
+## Trade-offs
+
+Fine-grained labels improve diagnosis, but annotation takes longer and ambiguous cases need adjudication.
+
+## Example
+
+When Recall@K is zero, the case is retrieval-limited; when Recall@K is one and correctness fails, it is generation-limited.
+
+## Limitations
+
+Some failures have multiple causes, so a taxonomy should preserve evidence instead 
+
+---
+
+# Dense Retrieval
+
+ID: doc-05
+
+## Definition
+
+Dense retrieval ranks chunks by cosine similarity between query and chunk embeddings.
+Recall@K measures whether at least one expected document appears in the first K retrieval results.
+
+## Trade-offs
+
+Increasing top K can improve recall, but it consumes prompt tokens and may introduce distracting evidence.
+
+## Example
+
+If an expected document is ranked third, Recall@3 is one and reciprocal rank is one third.
+
+## Limitations
+
+Dense retrieval can miss exact identifiers and rare terms that lexical retrieval handles well.
+
+
+---
+
+# Reproducible Deployment
+
+ID: doc-12
+
+## Definition
+
+A reproducible run records the commit SHA, dataset hash, prompt hash, configuration, model IDs, and random seed.
+SQLite WAL mode lets readers continue while a coordinator serializes experiment writes.
+
+## Trade-offs
+
+Local SQLite keeps deployment simple, but it is not a substitute for a distributed high-write database.
+
+## Example
+
+The runner writes case results first, then generates static JSON and HTML reports from the committed experiment record.
+
+## Limitations
+
+Reproducibility metadata cannot compensate for a provider that silently cha
+
+---
+
+# Candidate Reranking
+
+ID: doc-06
+
+## Definition
+
+A reranker reorders a small candidate set using a query-document relevance model.
+Reranking improves precision only when the first-stage retriever already includes useful evidence.
+
+## Trade-offs
+
+Cross-encoder rerankers inspect query-document pairs more deeply, but add one scoring operation per candidate.
+
+## Example
+
+A retriever returns 20 chunks, a reranker scores those 20, and the prompt receives the best 4.
+
+## Limitations
+
+A reranker cannot recover a relevant document that was absent from the candidate set.
+",5,与 context 定义一致。
+What is the output of document ingestion?,The provided context does not contain information about the output of document ingestion.,"-offs
+
+Fine-grained labels improve diagnosis, but annotation takes longer and ambiguous cases need adjudication.
+
+## Example
+
+When Recall@K is zero, the case is retrieval-limited; when Recall@K is one and correctness fails, it is generation-limited.
+
+## Limitations
+
+Some failures have multiple cause
+
+---
+
+# Failure Taxonomy
+
+ID: doc-11
+
+## Definition
+
+A retrieval miss occurs when expected evidence is absent from the retrieved context.
+A generation failure occurs when evidence is present but the answer is incorrect, unsupported, or malformed.
+
+## Trade-offs
+
+Fine-grained labels improve diagnosis, but 
+
+---
+
+# RAG Evaluation
+
+ID: doc-08
+
+## Definition
+
+Retrieval metrics and generation metrics must be reported separately to localize failures.
+MRR rewards systems that place the first relevant result near the top of the ranking.
+
+## Trade-offs
+
+Reference metrics are repeatable and cheap, while model judges
+
+---
+
+ions
+
+RAG does not guarantee correctness when the corpus is incomplete, retrieval misses evidence, or the generator ignores context.
+",5,context 确无 ingestion 输出信息，正确拒答。
+Which latency summaries should a report include?,"Latency reports should include mean, P50, and P95 rather than only an average.","s, so a taxonomy should preserve evidence instead of forcing certainty.
+
+
+---
+
+# Candidate Reranking
+
+ID: doc-06
+
+## Definition
+
+A reranker reorders a small candidate set using a query-document relevance model.
+Reranking improves precision only when the first-stage retriever already includes useful evidence.
+
+## Trade-offs
+
+Cross-encoder rerankers inspect query-document pairs more deeply, but add one scoring operation per candidate.
+
+## Example
+
+A retriever returns 20 chunks, a reranker scores those 20, and the prompt receives the best 4.
+
+## Limitations
+
+A reranker cannot recover a relevant document that was absent from the candidate set.
+
+
+---
+
+cannot compensate for a provider that silently changes a model behind the same identifier.
+
+
+---
+
+# Cost and Latency Controls
+
+ID: doc-10
+
+## Definition
+
+A conservative preflight estimate multiplies bounded token counts by verified prices and a safety multiplier.
+Latency reports should include mean, P50, and P95 rather than only an average.
+
+## Trade-offs
+
+Parallel requests reduce wall-clock time but increase rate-limit pressure and complicate ordered persistence.
+
+## Example
+
+A runner refuses to start when its buffered estimate exceeds ninety percent of the configured hard budget.
+
+## Limitations
+
+Token estimates and published prices can drift, so live runs must record actual usage and pr",5,与 context 说明一致，完整准确。

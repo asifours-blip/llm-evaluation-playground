@@ -1,0 +1,57 @@
+{
+  "artifact_type": "live_benchmark_run",
+  "run_date": "2026-08-21",
+  "experiment_id": "d212f35b-3482-4e52-9490-338be5520511",
+  "status": "completed_with_isolated_failures",
+  "pricing_evidence": {
+    "pricing_path": "configs/pricing/deepseek-2026-08-21.yaml",
+    "pricing_rate_basis": "peak",
+    "pricing_verified_at": "2026-08-21",
+    "pricing_source_url": "https://api-docs.deepseek.com/zh-cn/quick_start/pricing/"
+  },
+  "preflight": {
+    "unbuffered_cost_cny": "10.492416",
+    "buffered_cost_cny": "13.115520",
+    "maximum_http_attempts": 1152,
+    "gate": "pass"
+  },
+  "execution_guardrails": {
+    "original_hard_budget_cny": "20.000000",
+    "fuse_limit_cny": "19.673280",
+    "fuse_basis": "1.5 * preflight_unbuffered_cost_cny",
+    "request_input_output_caps": "enabled",
+    "budget_fuse_triggered": false
+  },
+  "actuals": {
+    "case_arms": 96,
+    "completed_case_arms": 86,
+    "isolated_failed_case_arms": 10,
+    "http_requests": {
+      "count": 192,
+      "derivation": "172 calls have provider-reported generation or judge usage (86 completed case-arms × 2); 10 isolated generation validation failures each dispatched a primary and repair request, for 20 additional HTTP calls."
+    },
+    "cost_cny": "0.881046",
+    "cost_components": {
+      "provider_reported_usage_cny": "0.298926",
+      "conservative_estimated_failure_reservations_cny": "0.582120"
+    },
+    "vs_preflight_unbuffered_percent": "-91.6030",
+    "gate": "pass"
+  },
+  "quality_summary": {
+    "retrieval_recall_at_k": 0.6944444444444444,
+    "retrieval_mrr": 0.5543981481481481,
+    "retrieval_context_hit_rate": 0.6111111111111112,
+    "judge_mean_score": 4.0,
+    "judge_pass_rate": 0.7674418604651163,
+    "abstention_accuracy": 0.8488372093023255,
+    "false_answer_rate": 0.21428571428571427
+  },
+  "failure_summary": {
+    "phase": "generation",
+    "count": 10,
+    "reason": "The model returned a structured payload whose answer field was null after the bounded repair attempt; each case-arm was persisted as failed and did not abort the batch.",
+    "usage_accounting": "Provider usage was unavailable for these failed responses, so the ledger conservatively charged their reserved generation envelopes."
+  },
+  "source_report": "artifacts/live-deepseek-pilot/d212f35b-3482-4e52-9490-338be5520511.json"
+}

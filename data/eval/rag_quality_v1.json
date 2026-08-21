@@ -1,0 +1,571 @@
+{
+  "version": "1.0.0",
+  "name": "rag-quality-v1",
+  "description": "Controlled RAG evaluation cases covering retrieval, generation, and abstention.",
+  "cases": [
+    {
+      "id": "rag-001",
+      "question": "What does retrieval-augmented generation do before writing an answer?",
+      "reference_answer": "It retrieves external evidence before the LLM writes an answer.",
+      "answerability": "answerable",
+      "expected_document_ids": ["doc-01"],
+      "reference_evidence": ["Retrieval-augmented generation (RAG) retrieves external evidence before an LLM writes an answer."],
+      "category": "rag_overview",
+      "difficulty": "easy",
+      "tags": ["single_document"]
+    },
+    {
+      "id": "rag-002",
+      "question": "Which stages normally make up a RAG request?",
+      "reference_answer": "Ingestion, retrieval, prompt construction, generation, and evaluation.",
+      "answerability": "answerable",
+      "expected_document_ids": ["doc-01"],
+      "reference_evidence": ["A RAG request normally includes ingestion, retrieval, prompt construction, generation, and evaluation."],
+      "category": "rag_overview",
+      "difficulty": "easy",
+      "tags": ["single_document"]
+    },
+    {
+      "id": "rag-003",
+      "question": "What is the output of document ingestion?",
+      "reference_answer": "Normalized documents with stable IDs and metadata.",
+      "answerability": "answerable",
+      "expected_document_ids": ["doc-02"],
+      "reference_evidence": ["Ingestion converts source files into normalized documents with stable IDs and metadata."],
+      "category": "ingestion",
+      "difficulty": "easy",
+      "tags": ["single_document"]
+    },
+    {
+      "id": "rag-004",
+      "question": "Why use a content hash during ingestion?",
+      "reference_answer": "It detects content changes without relying on file modification times.",
+      "answerability": "answerable",
+      "expected_document_ids": ["doc-02"],
+      "reference_evidence": ["A content hash detects changes without depending on file modification times."],
+      "category": "ingestion",
+      "difficulty": "medium",
+      "tags": ["single_document"]
+    },
+    {
+      "id": "rag-005",
+      "question": "What is chunking in a RAG pipeline?",
+      "reference_answer": "It divides normalized documents into retrieval units that fit model limits.",
+      "answerability": "answerable",
+      "expected_document_ids": ["doc-03"],
+      "reference_evidence": ["Chunking divides a normalized document into retrieval units that fit the embedding and prompt limits."],
+      "category": "chunking",
+      "difficulty": "easy",
+      "tags": ["single_document"]
+    },
+    {
+      "id": "rag-006",
+      "question": "What purpose does chunk overlap serve?",
+      "reference_answer": "It repeats boundary text so edge-split facts can still be retrieved.",
+      "answerability": "answerable",
+      "expected_document_ids": ["doc-03"],
+      "reference_evidence": ["Chunk overlap repeats boundary text so facts split near an edge can remain recoverable."],
+      "category": "chunking",
+      "difficulty": "medium",
+      "tags": ["single_document"]
+    },
+    {
+      "id": "rag-007",
+      "question": "What does an embedding enable a system to compute?",
+      "reference_answer": "It maps text to a vector so semantic similarity can be computed.",
+      "answerability": "answerable",
+      "expected_document_ids": ["doc-04"],
+      "reference_evidence": ["An embedding maps text to a numeric vector so semantic similarity can be computed."],
+      "category": "embeddings",
+      "difficulty": "easy",
+      "tags": ["single_document"]
+    },
+    {
+      "id": "rag-008",
+      "question": "Which fields must be part of an embedding cache key?",
+      "reference_answer": "The model name, normalized text hash, and preprocessing version.",
+      "answerability": "answerable",
+      "expected_document_ids": ["doc-04"],
+      "reference_evidence": ["Embedding caches must include the model name, normalized text hash, and preprocessing version in the key."],
+      "category": "embeddings",
+      "difficulty": "medium",
+      "tags": ["single_document"]
+    },
+    {
+      "id": "rag-009",
+      "question": "How does dense retrieval rank chunks?",
+      "reference_answer": "By cosine similarity between query and chunk embeddings.",
+      "answerability": "answerable",
+      "expected_document_ids": ["doc-05"],
+      "reference_evidence": ["Dense retrieval ranks chunks by cosine similarity between query and chunk embeddings."],
+      "category": "retrieval",
+      "difficulty": "easy",
+      "tags": ["single_document"]
+    },
+    {
+      "id": "rag-010",
+      "question": "What does Recall@K measure in this corpus?",
+      "reference_answer": "Whether at least one expected document appears among the first K results.",
+      "answerability": "answerable",
+      "expected_document_ids": ["doc-05"],
+      "reference_evidence": ["Recall@K measures whether at least one expected document appears in the first K retrieval results."],
+      "category": "retrieval",
+      "difficulty": "medium",
+      "tags": ["single_document"]
+    },
+    {
+      "id": "rag-011",
+      "question": "What does a reranker do?",
+      "reference_answer": "It reorders a small candidate set with a query-document relevance model.",
+      "answerability": "answerable",
+      "expected_document_ids": ["doc-06"],
+      "reference_evidence": ["A reranker reorders a small candidate set using a query-document relevance model."],
+      "category": "reranking",
+      "difficulty": "easy",
+      "tags": ["single_document"]
+    },
+    {
+      "id": "rag-012",
+      "question": "When can reranking improve precision?",
+      "reference_answer": "Only when useful evidence is already present in the first-stage candidates.",
+      "answerability": "answerable",
+      "expected_document_ids": ["doc-06"],
+      "reference_evidence": ["Reranking improves precision only when the first-stage retriever already includes useful evidence."],
+      "category": "reranking",
+      "difficulty": "medium",
+      "tags": ["single_document"]
+    },
+    {
+      "id": "rag-013",
+      "question": "What two constraints does a grounded prompt place on an answer?",
+      "reference_answer": "Use only supplied evidence and cite stable document IDs.",
+      "answerability": "answerable",
+      "expected_document_ids": ["doc-07"],
+      "reference_evidence": ["A grounded prompt tells the model to answer only from supplied evidence and to cite stable document IDs."],
+      "category": "prompting",
+      "difficulty": "easy",
+      "tags": ["single_document"]
+    },
+    {
+      "id": "rag-014",
+      "question": "What does the evidence-first prompt variant ask the model to do first?",
+      "reference_answer": "List supporting facts before composing the final answer.",
+      "answerability": "answerable",
+      "expected_document_ids": ["doc-07"],
+      "reference_evidence": ["The evidence-first variant asks the model to list supporting facts before composing the final answer."],
+      "category": "prompting",
+      "difficulty": "easy",
+      "tags": ["single_document"]
+    },
+    {
+      "id": "rag-015",
+      "question": "Why report retrieval and generation metrics separately?",
+      "reference_answer": "Separating them localizes whether retrieval or generation failed.",
+      "answerability": "answerable",
+      "expected_document_ids": ["doc-08"],
+      "reference_evidence": ["Retrieval metrics and generation metrics must be reported separately to localize failures."],
+      "category": "evaluation",
+      "difficulty": "medium",
+      "tags": ["single_document"]
+    },
+    {
+      "id": "rag-016",
+      "question": "What behavior does MRR reward?",
+      "reference_answer": "Putting the first relevant result near the top of the ranking.",
+      "answerability": "answerable",
+      "expected_document_ids": ["doc-08"],
+      "reference_evidence": ["MRR rewards systems that place the first relevant result near the top of the ranking."],
+      "category": "evaluation",
+      "difficulty": "easy",
+      "tags": ["single_document"]
+    },
+    {
+      "id": "rag-017",
+      "question": "What does abstention mean in this evaluation?",
+      "reference_answer": "Explicitly declining when the controlled corpus lacks sufficient evidence.",
+      "answerability": "answerable",
+      "expected_document_ids": ["doc-09"],
+      "reference_evidence": ["Abstention means explicitly declining to answer when the controlled corpus lacks sufficient evidence."],
+      "category": "abstention",
+      "difficulty": "easy",
+      "tags": ["single_document"]
+    },
+    {
+      "id": "rag-018",
+      "question": "How is false-answer rate defined?",
+      "reference_answer": "The fraction of unanswerable cases receiving a substantive answer.",
+      "answerability": "answerable",
+      "expected_document_ids": ["doc-09"],
+      "reference_evidence": ["False-answer rate is the fraction of unanswerable cases that receive a substantive answer."],
+      "category": "abstention",
+      "difficulty": "medium",
+      "tags": ["single_document"]
+    },
+    {
+      "id": "rag-019",
+      "question": "How is a conservative cost preflight estimate formed?",
+      "reference_answer": "Multiply bounded token counts by verified prices and a safety multiplier.",
+      "answerability": "answerable",
+      "expected_document_ids": ["doc-10"],
+      "reference_evidence": ["A conservative preflight estimate multiplies bounded token counts by verified prices and a safety multiplier."],
+      "category": "cost",
+      "difficulty": "medium",
+      "tags": ["single_document"]
+    },
+    {
+      "id": "rag-020",
+      "question": "Which latency summaries should a report include?",
+      "reference_answer": "Mean, P50, and P95.",
+      "answerability": "answerable",
+      "expected_document_ids": ["doc-10"],
+      "reference_evidence": ["Latency reports should include mean, P50, and P95 rather than only an average."],
+      "category": "latency",
+      "difficulty": "easy",
+      "tags": ["single_document"]
+    },
+    {
+      "id": "rag-021",
+      "question": "What is a retrieval miss?",
+      "reference_answer": "Expected evidence is absent from the retrieved context.",
+      "answerability": "answerable",
+      "expected_document_ids": ["doc-11"],
+      "reference_evidence": ["A retrieval miss occurs when expected evidence is absent from the retrieved context."],
+      "category": "failures",
+      "difficulty": "easy",
+      "tags": ["single_document"]
+    },
+    {
+      "id": "rag-022",
+      "question": "What is a generation failure when evidence is available?",
+      "reference_answer": "The generated answer is incorrect, unsupported, or malformed despite present evidence.",
+      "answerability": "answerable",
+      "expected_document_ids": ["doc-11"],
+      "reference_evidence": ["A generation failure occurs when evidence is present but the answer is incorrect, unsupported, or malformed."],
+      "category": "failures",
+      "difficulty": "medium",
+      "tags": ["single_document"]
+    },
+    {
+      "id": "rag-023",
+      "question": "Which identity fields make an evaluation run reproducible?",
+      "reference_answer": "Commit SHA, dataset hash, prompt hash, configuration, model IDs, and random seed.",
+      "answerability": "answerable",
+      "expected_document_ids": ["doc-12"],
+      "reference_evidence": ["A reproducible run records the commit SHA, dataset hash, prompt hash, configuration, model IDs, and random seed."],
+      "category": "deployment",
+      "difficulty": "medium",
+      "tags": ["single_document"]
+    },
+    {
+      "id": "rag-024",
+      "question": "Why enable SQLite WAL mode for experiment storage?",
+      "reference_answer": "It lets readers continue while one coordinator serializes writes.",
+      "answerability": "answerable",
+      "expected_document_ids": ["doc-12"],
+      "reference_evidence": ["SQLite WAL mode lets readers continue while a coordinator serializes experiment writes."],
+      "category": "deployment",
+      "difficulty": "medium",
+      "tags": ["single_document"]
+    },
+    {
+      "id": "rag-025",
+      "question": "How does ingestion support the first part of a reproducible RAG pipeline?",
+      "reference_answer": "RAG begins by retrieving external evidence, while ingestion prepares normalized documents with stable IDs and metadata.",
+      "answerability": "answerable",
+      "expected_document_ids": ["doc-01", "doc-02"],
+      "reference_evidence": [
+        "Retrieval-augmented generation (RAG) retrieves external evidence before an LLM writes an answer.",
+        "Ingestion converts source files into normalized documents with stable IDs and metadata."
+      ],
+      "category": "pipeline",
+      "difficulty": "hard",
+      "tags": ["multi_document"]
+    },
+    {
+      "id": "rag-026",
+      "question": "Which two mechanisms help detect changed sources and preserve facts near chunk boundaries?",
+      "reference_answer": "Content hashes detect changed sources, and chunk overlap repeats boundary text.",
+      "answerability": "answerable",
+      "expected_document_ids": ["doc-02", "doc-03"],
+      "reference_evidence": [
+        "A content hash detects changes without depending on file modification times.",
+        "Chunk overlap repeats boundary text so facts split near an edge can remain recoverable."
+      ],
+      "category": "ingestion_chunking",
+      "difficulty": "hard",
+      "tags": ["multi_document"]
+    },
+    {
+      "id": "rag-027",
+      "question": "How do chunking and cache identity work together before retrieval?",
+      "reference_answer": "Chunking creates bounded retrieval units, and cache keys bind their vectors to text, preprocessing, and model identity.",
+      "answerability": "answerable",
+      "expected_document_ids": ["doc-03", "doc-04"],
+      "reference_evidence": [
+        "Chunking divides a normalized document into retrieval units that fit the embedding and prompt limits.",
+        "Embedding caches must include the model name, normalized text hash, and preprocessing version in the key."
+      ],
+      "category": "chunking_embeddings",
+      "difficulty": "hard",
+      "tags": ["multi_document"]
+    },
+    {
+      "id": "rag-028",
+      "question": "What representation and comparison does dense retrieval use?",
+      "reference_answer": "Embeddings represent text as vectors, and dense retrieval compares query and chunk vectors with cosine similarity.",
+      "answerability": "answerable",
+      "expected_document_ids": ["doc-04", "doc-05"],
+      "reference_evidence": [
+        "An embedding maps text to a numeric vector so semantic similarity can be computed.",
+        "Dense retrieval ranks chunks by cosine similarity between query and chunk embeddings."
+      ],
+      "category": "embeddings_retrieval",
+      "difficulty": "medium",
+      "tags": ["multi_document"]
+    },
+    {
+      "id": "rag-029",
+      "question": "Why must first-stage retrieval be evaluated before reranking?",
+      "reference_answer": "Recall@K checks whether expected documents enter the candidate set, and reranking cannot help unless useful evidence is already there.",
+      "answerability": "answerable",
+      "expected_document_ids": ["doc-05", "doc-06"],
+      "reference_evidence": [
+        "Recall@K measures whether at least one expected document appears in the first K retrieval results.",
+        "Reranking improves precision only when the first-stage retriever already includes useful evidence."
+      ],
+      "category": "retrieval_reranking",
+      "difficulty": "hard",
+      "tags": ["multi_document"]
+    },
+    {
+      "id": "rag-030",
+      "question": "What should happen between candidate retrieval and a grounded final answer?",
+      "reference_answer": "A reranker can reorder candidates, then a grounded prompt restricts the model to supplied evidence and stable citations.",
+      "answerability": "answerable",
+      "expected_document_ids": ["doc-06", "doc-07"],
+      "reference_evidence": [
+        "A reranker reorders a small candidate set using a query-document relevance model.",
+        "A grounded prompt tells the model to answer only from supplied evidence and to cite stable document IDs."
+      ],
+      "category": "reranking_prompting",
+      "difficulty": "hard",
+      "tags": ["multi_document"]
+    },
+    {
+      "id": "rag-031",
+      "question": "How can a prompt experiment be evaluated without confusing retrieval and generation?",
+      "reference_answer": "Use a defined prompt variant, then report retrieval and generation metrics separately.",
+      "answerability": "answerable",
+      "expected_document_ids": ["doc-07", "doc-08"],
+      "reference_evidence": [
+        "The evidence-first variant asks the model to list supporting facts before composing the final answer.",
+        "Retrieval metrics and generation metrics must be reported separately to localize failures."
+      ],
+      "category": "prompting_evaluation",
+      "difficulty": "hard",
+      "tags": ["multi_document"]
+    },
+    {
+      "id": "rag-032",
+      "question": "Which evaluation split and metric expose unsupported answers?",
+      "reference_answer": "Separate retrieval from generation metrics and report false-answer rate on unanswerable cases.",
+      "answerability": "answerable",
+      "expected_document_ids": ["doc-08", "doc-09"],
+      "reference_evidence": [
+        "Retrieval metrics and generation metrics must be reported separately to localize failures.",
+        "False-answer rate is the fraction of unanswerable cases that receive a substantive answer."
+      ],
+      "category": "evaluation_abstention",
+      "difficulty": "hard",
+      "tags": ["multi_document"]
+    },
+    {
+      "id": "rag-033",
+      "question": "Which safeguards address hallucination risk and spending risk?",
+      "reference_answer": "Measure false answers on unsupported cases and run a buffered cost preflight using verified prices.",
+      "answerability": "answerable",
+      "expected_document_ids": ["doc-09", "doc-10"],
+      "reference_evidence": [
+        "False-answer rate is the fraction of unanswerable cases that receive a substantive answer.",
+        "A conservative preflight estimate multiplies bounded token counts by verified prices and a safety multiplier."
+      ],
+      "category": "abstention_cost",
+      "difficulty": "hard",
+      "tags": ["multi_document"]
+    },
+    {
+      "id": "rag-034",
+      "question": "How should an experiment connect performance reporting with failure diagnosis?",
+      "reference_answer": "Report mean, P50, and P95 latency, and distinguish retrieval misses from failures after evidence is present.",
+      "answerability": "answerable",
+      "expected_document_ids": ["doc-10", "doc-11"],
+      "reference_evidence": [
+        "Latency reports should include mean, P50, and P95 rather than only an average.",
+        "A retrieval miss occurs when expected evidence is absent from the retrieved context."
+      ],
+      "category": "latency_failures",
+      "difficulty": "hard",
+      "tags": ["multi_document"]
+    },
+    {
+      "id": "rag-035",
+      "question": "What records let a team reproduce and classify a failed case?",
+      "reference_answer": "Preserve whether evidence was retrieved and record commit, dataset, prompt, configuration, models, and seed.",
+      "answerability": "answerable",
+      "expected_document_ids": ["doc-11", "doc-12"],
+      "reference_evidence": [
+        "A generation failure occurs when evidence is present but the answer is incorrect, unsupported, or malformed.",
+        "A reproducible run records the commit SHA, dataset hash, prompt hash, configuration, model IDs, and random seed."
+      ],
+      "category": "failures_deployment",
+      "difficulty": "hard",
+      "tags": ["multi_document"]
+    },
+    {
+      "id": "rag-036",
+      "question": "How do reproducibility metadata and the RAG stage model complement each other?",
+      "reference_answer": "The stage model identifies where work happens, while hashes, configuration, model IDs, and seed identify the exact run.",
+      "answerability": "answerable",
+      "expected_document_ids": ["doc-12", "doc-01"],
+      "reference_evidence": [
+        "A reproducible run records the commit SHA, dataset hash, prompt hash, configuration, model IDs, and random seed.",
+        "A RAG request normally includes ingestion, retrieval, prompt construction, generation, and evaluation."
+      ],
+      "category": "deployment_pipeline",
+      "difficulty": "hard",
+      "tags": ["multi_document"]
+    },
+    {
+      "id": "rag-037",
+      "question": "What will the weather be in Paris tomorrow?",
+      "reference_answer": "The controlled corpus does not contain weather forecasts.",
+      "answerability": "unanswerable",
+      "expected_document_ids": [],
+      "reference_evidence": [],
+      "category": "out_of_scope",
+      "difficulty": "easy",
+      "tags": ["explicit_oos"]
+    },
+    {
+      "id": "rag-038",
+      "question": "Write a SQL migration that adds a customer billing table.",
+      "reference_answer": "The controlled corpus does not specify a database schema or migration task.",
+      "answerability": "unanswerable",
+      "expected_document_ids": [],
+      "reference_evidence": [],
+      "category": "out_of_scope",
+      "difficulty": "easy",
+      "tags": ["explicit_oos"]
+    },
+    {
+      "id": "rag-039",
+      "question": "Which Kubernetes command should autoscale the production API?",
+      "reference_answer": "The controlled corpus does not contain Kubernetes commands or production settings.",
+      "answerability": "unanswerable",
+      "expected_document_ids": [],
+      "reference_evidence": [],
+      "category": "out_of_scope",
+      "difficulty": "medium",
+      "tags": ["explicit_oos"]
+    },
+    {
+      "id": "rag-040",
+      "question": "What legal retention period applies to user prompts in China?",
+      "reference_answer": "The controlled corpus does not provide legal advice or retention requirements.",
+      "answerability": "unanswerable",
+      "expected_document_ids": [],
+      "reference_evidence": [],
+      "category": "out_of_scope",
+      "difficulty": "medium",
+      "tags": ["explicit_oos"]
+    },
+    {
+      "id": "rag-041",
+      "question": "How many GPUs are installed in the evaluation server?",
+      "reference_answer": "The controlled corpus does not describe server hardware.",
+      "answerability": "unanswerable",
+      "expected_document_ids": [],
+      "reference_evidence": [],
+      "category": "out_of_scope",
+      "difficulty": "easy",
+      "tags": ["explicit_oos"]
+    },
+    {
+      "id": "rag-042",
+      "question": "What was the company's revenue last quarter?",
+      "reference_answer": "The controlled corpus contains no company financial results.",
+      "answerability": "unanswerable",
+      "expected_document_ids": [],
+      "reference_evidence": [],
+      "category": "out_of_scope",
+      "difficulty": "easy",
+      "tags": ["explicit_oos"]
+    },
+    {
+      "id": "rag-043",
+      "question": "What chunk size is guaranteed to maximize answer accuracy?",
+      "reference_answer": "The corpus describes chunk-size trade-offs but gives no universally optimal value.",
+      "answerability": "unanswerable",
+      "expected_document_ids": [],
+      "reference_evidence": [],
+      "category": "unsupported_detail",
+      "difficulty": "hard",
+      "tags": ["plausible_unsupported"]
+    },
+    {
+      "id": "rag-044",
+      "question": "What cosine-similarity threshold guarantees a relevant chunk?",
+      "reference_answer": "The corpus explains cosine ranking but defines no guaranteed relevance threshold.",
+      "answerability": "unanswerable",
+      "expected_document_ids": [],
+      "reference_evidence": [],
+      "category": "unsupported_detail",
+      "difficulty": "hard",
+      "tags": ["plausible_unsupported"]
+    },
+    {
+      "id": "rag-045",
+      "question": "Which embedding model achieved the best score in the benchmark?",
+      "reference_answer": "The corpus names no benchmark winner or measured embedding-model scores.",
+      "answerability": "unanswerable",
+      "expected_document_ids": [],
+      "reference_evidence": [],
+      "category": "unsupported_detail",
+      "difficulty": "medium",
+      "tags": ["plausible_unsupported"]
+    },
+    {
+      "id": "rag-046",
+      "question": "What P95 latency did the live DeepSeek run achieve?",
+      "reference_answer": "The corpus defines latency reporting but contains no live-run measurement.",
+      "answerability": "unanswerable",
+      "expected_document_ids": [],
+      "reference_evidence": [],
+      "category": "unsupported_detail",
+      "difficulty": "medium",
+      "tags": ["plausible_unsupported"]
+    },
+    {
+      "id": "rag-047",
+      "question": "What is the current exact token price for the preferred provider?",
+      "reference_answer": "The corpus requires verified prices but does not state a current provider price.",
+      "answerability": "unanswerable",
+      "expected_document_ids": [],
+      "reference_evidence": [],
+      "category": "unsupported_detail",
+      "difficulty": "hard",
+      "tags": ["plausible_unsupported"]
+    },
+    {
+      "id": "rag-048",
+      "question": "What production answer accuracy has this system proven?",
+      "reference_answer": "The corpus contains no production deployment accuracy result.",
+      "answerability": "unanswerable",
+      "expected_document_ids": [],
+      "reference_evidence": [],
+      "category": "unsupported_detail",
+      "difficulty": "hard",
+      "tags": ["plausible_unsupported"]
+    }
+  ]
+}

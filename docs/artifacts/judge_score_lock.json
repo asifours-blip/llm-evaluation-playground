@@ -1,0 +1,104 @@
+{
+  "artifact_type": "locked_judge_scores",
+  "experiment_id": "d212f35b-3482-4e52-9490-338be5520511",
+  "sample_count": 12,
+  "scores": [
+    {
+      "row": 1,
+      "sample_id": "d7ebcd8c5936078934dea343",
+      "case_id": "rag-036",
+      "config_id": "chunk300-overlap50-top4-evidence_first",
+      "judge_score": 2,
+      "content_hash": "7f12564b6564ec31744d2a3ec208509468f8eed42e96ff52adea9974dfc1e34b"
+    },
+    {
+      "row": 2,
+      "sample_id": "fecb6bdc33c8023b8fd5be6f",
+      "case_id": "rag-034",
+      "config_id": "chunk600-overlap50-top4-evidence_first",
+      "judge_score": 4,
+      "content_hash": "fd7ae95b037c29e21ed6a418a776b2734a310804de818bdfc254e41b3d11dc54"
+    },
+    {
+      "row": 3,
+      "sample_id": "ceea09958e1bfe558fa00c52",
+      "case_id": "rag-041",
+      "config_id": "chunk600-overlap50-top4-evidence_first",
+      "judge_score": 5,
+      "content_hash": "29bdd1acf9fe65f6c74d020d4e01267748fbc7e1024c912a95964bb73f7531a1"
+    },
+    {
+      "row": 4,
+      "sample_id": "1b101e10d44c7ee352ff2399",
+      "case_id": "rag-045",
+      "config_id": "chunk600-overlap50-top4-evidence_first",
+      "judge_score": 5,
+      "content_hash": "6d67a2b7dd9abf99d1e802e0210cb10079a601179349926e98a4d5307e406263"
+    },
+    {
+      "row": 5,
+      "sample_id": "f354bf63d1f9aca4d3de1ab8",
+      "case_id": "rag-048",
+      "config_id": "chunk300-overlap50-top4-evidence_first",
+      "judge_score": 5,
+      "content_hash": "d8a06b4ec9c69bdf38f9ffe652216395e5b41dbdbebbd93605750ec37f490ad9"
+    },
+    {
+      "row": 6,
+      "sample_id": "cad7aea6b3884073ae7cc2f9",
+      "case_id": "rag-017",
+      "config_id": "chunk300-overlap50-top4-evidence_first",
+      "judge_score": 5,
+      "content_hash": "8497cf4805247d818a3e0f73c82146a7b99be2c4e352870cbc131201053f3b68"
+    },
+    {
+      "row": 7,
+      "sample_id": "c4129fb987ee566593b51500",
+      "case_id": "rag-005",
+      "config_id": "chunk300-overlap50-top4-evidence_first",
+      "judge_score": 1,
+      "content_hash": "5d6358bade6d57f7e73a37497757638ef81d32dc79cd291bd6119967573c63cd"
+    },
+    {
+      "row": 8,
+      "sample_id": "03169dde338889d56e30c23c",
+      "case_id": "rag-007",
+      "config_id": "chunk600-overlap50-top4-evidence_first",
+      "judge_score": 5,
+      "content_hash": "817b75c4fdaaab29b69a6f757d0eaff957d59027fc44fe15d1e4545f10e11bfa"
+    },
+    {
+      "row": 9,
+      "sample_id": "da6b9c7694b1d8867c6f01e7",
+      "case_id": "rag-016",
+      "config_id": "chunk300-overlap50-top4-evidence_first",
+      "judge_score": 5,
+      "content_hash": "aaa0ad1267ebf4c799e0eba5f2b270751f12cf2b5971176c63cc76e888dd6967"
+    },
+    {
+      "row": 10,
+      "sample_id": "31ffda28d826d610c0fbf8a6",
+      "case_id": "rag-021",
+      "config_id": "chunk600-overlap50-top4-evidence_first",
+      "judge_score": 5,
+      "content_hash": "a715c2883a67e67524dcd0cd3f3364d93cac06d7b9d17d924aea804176c2a4c7"
+    },
+    {
+      "row": 11,
+      "sample_id": "d3e7dbdf3c898cde95c84cda",
+      "case_id": "rag-003",
+      "config_id": "chunk300-overlap50-top4-evidence_first",
+      "judge_score": 1,
+      "content_hash": "29edfdb826073d9f240911f3344571dbc89b25b1f4537064e761676460013ea2"
+    },
+    {
+      "row": 12,
+      "sample_id": "b16231f040b08a56f93285a2",
+      "case_id": "rag-020",
+      "config_id": "chunk600-overlap50-top4-evidence_first",
+      "judge_score": 5,
+      "content_hash": "320a75d56f0b8e2e2efcc3d37b695d9588dbd2499fcce3c98f69eade96b04cf0"
+    }
+  ],
+  "sha256": "7a7920718eb68f3cfcaca4df9503119b5d211aac4a61efb768f2dd3c7f1d5dee"
+}

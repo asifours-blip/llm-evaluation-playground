@@ -1,0 +1,156 @@
+{
+  "artifact_type": "blind_sample_manifest",
+  "experiment_id": "544dcc6e-b60d-4bd1-bde0-8c8bb89c3508",
+  "sample_seed": 44,
+  "sample_count": 12,
+  "sampling_rules": {
+    "forced_boundary_cases": 2,
+    "forced_reject_cases": 3,
+    "remainder": "seeded stratified round-robin across retrieval configuration, answerability, difficulty, and category",
+    "unique_source_case_ids": true
+  },
+  "configuration_counts": {
+    "chunk300-overlap50-top4-evidence_first": 6,
+    "chunk600-overlap50-top4-evidence_first": 6
+  },
+  "rows": [
+    {
+      "row": 1,
+      "sample_id": "30c338cda7b59a848c14c113",
+      "case_id": "rag-006",
+      "config_id": "chunk300-overlap50-top4-evidence_first",
+      "answerability": "answerable",
+      "difficulty": "medium",
+      "selection_reason": "boundary_case: seeded selection from non-extreme judge outcomes (score 2--4)",
+      "content_hash": "7afdef9458c4d67403f416fba1b25fdf3b514b1159069d997366e92c9ede906b"
+    },
+    {
+      "row": 2,
+      "sample_id": "ecded2e5bb5d123b9efc1cc3",
+      "case_id": "rag-030",
+      "config_id": "chunk600-overlap50-top4-evidence_first",
+      "answerability": "answerable",
+      "difficulty": "hard",
+      "selection_reason": "boundary_case: seeded selection from non-extreme judge outcomes (score 2--4)",
+      "content_hash": "d28f44e8340acf73e494e0afd522af324e27d3d671cb08eb7505b1268739f113"
+    },
+    {
+      "row": 3,
+      "sample_id": "bcbf0a07c3328fa8c1442379",
+      "case_id": "rag-042",
+      "config_id": "chunk300-overlap50-top4-evidence_first",
+      "answerability": "unanswerable",
+      "difficulty": "easy",
+      "selection_reason": "reject_case: seeded unanswerable coverage (easy)",
+      "content_hash": "2edf0656350978c27b3dc876b330f6ff8ec99221b1d228f77d1f2765c46ddee9"
+    },
+    {
+      "row": 4,
+      "sample_id": "f01979790b86de659c71cb10",
+      "case_id": "rag-040",
+      "config_id": "chunk300-overlap50-top4-evidence_first",
+      "answerability": "unanswerable",
+      "difficulty": "medium",
+      "selection_reason": "reject_case: seeded unanswerable coverage (medium)",
+      "content_hash": "fbfec32c50ffd7a0b947bc949854b04129d16531ac1a21c1077a8279c859ce74"
+    },
+    {
+      "row": 5,
+      "sample_id": "d34b1b204421485de0330c9c",
+      "case_id": "rag-043",
+      "config_id": "chunk600-overlap50-top4-evidence_first",
+      "answerability": "unanswerable",
+      "difficulty": "hard",
+      "selection_reason": "reject_case: seeded unanswerable coverage (hard)",
+      "content_hash": "04f713736f64ff6600de8bdf1df8fc7f80c20d4eaa714ad00afcf9a10fafcffe"
+    },
+    {
+      "row": 6,
+      "sample_id": "f2caf0208e59d97e8faaa2fe",
+      "case_id": "rag-013",
+      "config_id": "chunk600-overlap50-top4-evidence_first",
+      "answerability": "answerable",
+      "difficulty": "easy",
+      "selection_reason": "stratified_seeded_random: configuration/answerability/difficulty/category",
+      "content_hash": "db52fdd2d3653169a29ee95e4448e1a9c2db41b2bfe4f7dddeea2f36736c5234"
+    },
+    {
+      "row": 7,
+      "sample_id": "ece79b46d7e949dafc1c224b",
+      "case_id": "rag-014",
+      "config_id": "chunk300-overlap50-top4-evidence_first",
+      "answerability": "answerable",
+      "difficulty": "easy",
+      "selection_reason": "stratified_seeded_random: configuration/answerability/difficulty/category",
+      "content_hash": "0a14b386ca14e16fe12272fb7791e93860cac5a11152417e6d00da87de94a6c3"
+    },
+    {
+      "row": 8,
+      "sample_id": "cc1f2e590a8906fda47df185",
+      "case_id": "rag-002",
+      "config_id": "chunk600-overlap50-top4-evidence_first",
+      "answerability": "answerable",
+      "difficulty": "easy",
+      "selection_reason": "stratified_seeded_random: configuration/answerability/difficulty/category",
+      "content_hash": "28c4ecf20c7db4e49e370c4e9755eaaf66af79d5f7c174dda15891d288c99856"
+    },
+    {
+      "row": 9,
+      "sample_id": "7ff5490b8e0192ca1ceb48b8",
+      "case_id": "rag-001",
+      "config_id": "chunk300-overlap50-top4-evidence_first",
+      "answerability": "answerable",
+      "difficulty": "easy",
+      "selection_reason": "stratified_seeded_random: configuration/answerability/difficulty/category",
+      "content_hash": "662323b11e9c473137d5418be966074b6c21cd9b6cfa6bf068bbbf515b6738af"
+    },
+    {
+      "row": 10,
+      "sample_id": "3a38f34da1ae0a27368060eb",
+      "case_id": "rag-011",
+      "config_id": "chunk600-overlap50-top4-evidence_first",
+      "answerability": "answerable",
+      "difficulty": "easy",
+      "selection_reason": "stratified_seeded_random: configuration/answerability/difficulty/category",
+      "content_hash": "e34c541afcc4fc3054057e081d093626f73542de3a851aca5e63cd0167245464"
+    },
+    {
+      "row": 11,
+      "sample_id": "4c5b83ec90f3ecf52cb70204",
+      "case_id": "rag-009",
+      "config_id": "chunk300-overlap50-top4-evidence_first",
+      "answerability": "answerable",
+      "difficulty": "easy",
+      "selection_reason": "stratified_seeded_random: configuration/answerability/difficulty/category",
+      "content_hash": "c8e9c1d873727368cbe87df6bd50ad3511e380851bf6281f87560b285683cf38"
+    },
+    {
+      "row": 12,
+      "sample_id": "99c73ecc068d5cef89a2087e",
+      "case_id": "rag-033",
+      "config_id": "chunk600-overlap50-top4-evidence_first",
+      "answerability": "answerable",
+      "difficulty": "hard",
+      "selection_reason": "stratified_seeded_random: configuration/answerability/difficulty/category",
+      "content_hash": "ccf0f41b39a5675092cce0cc74f1276d3b0885216ee9ae6bfa23d081b5d09756"
+    }
+  ],
+  "holdout": {
+    "sample_seed": 44,
+    "excluded_prior_diagnostic_case_ids": [
+      "rag-003",
+      "rag-005",
+      "rag-007",
+      "rag-016",
+      "rag-017",
+      "rag-020",
+      "rag-021",
+      "rag-034",
+      "rag-036",
+      "rag-041",
+      "rag-045",
+      "rag-048"
+    ],
+    "human_scoring_target": "Reference-answer correctness; reference answers are shown while Judge scores remain hidden."
+  }
+}

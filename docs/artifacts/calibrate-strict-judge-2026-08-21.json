@@ -1,0 +1,41 @@
+{
+  "artifact_type": "judge_human_calibration",
+  "protocol": "reference-answer-v1",
+  "experiment_id": "544dcc6e-b60d-4bd1-bde0-8c8bb89c3508",
+  "label_count": 12,
+  "metrics": {
+    "within_one_rate": 0.9166666666666666,
+    "within_one_count": 11,
+    "catastrophic_disagreement_count": 1,
+    "mean_signed_difference_human_minus_judge": -0.25,
+    "weighted_kappa_quadratic": 0.9032258064516128
+  },
+  "gates": {
+    "within_one_rate": {
+      "required": ">= 0.90 (11/12)",
+      "passed": true
+    },
+    "catastrophic_disagreement_count": {
+      "required": "0",
+      "passed": false
+    },
+    "mean_signed_difference": {
+      "required": "abs(value) <= 0.5",
+      "passed": true
+    },
+    "weighted_kappa": {
+      "required": "report only",
+      "value": 0.9032258064516128
+    }
+  },
+  "gate": "fail",
+  "gate_reasons": [
+    "catastrophic disagreements: 1"
+  ],
+  "escalations": [
+    {
+      "row": 1,
+      "difference": -2
+    }
+  ]
+}

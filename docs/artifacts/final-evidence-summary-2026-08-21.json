@@ -1,0 +1,50 @@
+{
+  "artifact_type": "final_benchmark_evidence_summary",
+  "badge": "final",
+  "experiment_id": "544dcc6e-b60d-4bd1-bde0-8c8bb89c3508",
+  "commit_sha": "66bcab4",
+  "run": {
+    "mode": "live",
+    "model": "deepseek-v4-flash",
+    "case_arms": 96,
+    "completed_case_arms": 96,
+    "failed_case_arms": 0,
+    "actual_cost_cny": "0.2820596",
+    "preflight_unbuffered_cost_cny": "10.492416",
+    "preflight_buffered_cost_cny": "13.11552000",
+    "budget_fuse_triggered": false,
+    "confirmed_completed_provider_operations": 192,
+    "actual_http_request_count": null,
+    "http_request_count_note": "The run predates physical HTTP-attempt instrumentation. The persisted evidence confirms 96 generation plus 96 Judge operations and an upper bound of 1152 attempts, but not an exact physical attempt count."
+  },
+  "quality": {
+    "retrieval_recall_at_k": 0.6944444444444444,
+    "retrieval_mrr": 0.5543981481481481,
+    "retrieval_context_hit_rate": 0.6111111111111112,
+    "judge_mean_score": 3.4583333333333335,
+    "judge_pass_rate": 0.6145833333333334,
+    "abstention_accuracy": 0.7916666666666666,
+    "false_answer_rate": 0.5416666666666666
+  },
+  "human_calibration": {
+    "protocol": "reference-answer-v1-adjudicated",
+    "sample_count": 12,
+    "sample_design": "Stratified blind sample with two boundary cases, three unanswerable cases, balanced retrieval configurations, and no overlap with the prior diagnostic set.",
+    "sample_size_note": "12 条分层盲标；n=12 下以容差一致率为主判据，weighted kappa 供参考。1 条边界样本由未见 Judge 分数的独立标注人复核裁定。",
+    "exact_agreement": 0.6666666666666666,
+    "within_one_rate": 1.0,
+    "catastrophic_disagreement_count": 0,
+    "mean_signed_difference_human_minus_judge": -0.16666666666666666,
+    "mean_absolute_error": 0.3333333333333333,
+    "weighted_kappa_quadratic": 0.9429928741092636,
+    "gate": "pass",
+    "gate_reasons": []
+  },
+  "reports": {
+    "json": "docs/artifacts/final-strict-judge/544dcc6e-b60d-4bd1-bde0-8c8bb89c3508.json",
+    "json_sha256": "ab971a6b24dfb2c6f25677b201eee5cb26639225fc14ce8374654a790b602d2f",
+    "html": "docs/artifacts/final-strict-judge/544dcc6e-b60d-4bd1-bde0-8c8bb89c3508.html",
+    "html_sha256": "0e7432335c3d4229c727809faabb4ff35d99e1589f44708dd78bddd156e715a7"
+  },
+  "resume_claim_status": "eligible_with_sample-size qualification and HTTP-attempt observability caveat"
+}

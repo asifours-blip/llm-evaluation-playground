@@ -1,0 +1,43 @@
+{
+  "artifact_type": "live_preflight",
+  "config": "configs/live-deepseek.example.yaml",
+  "generated_from_commit": "31b96586afb5a32cc2da2a9af7db607a3bf10af1",
+  "network_calls": 0,
+  "price_verification": {
+    "checked_at": "2026-08-21",
+    "source_url": "https://api-docs.deepseek.com/zh-cn/quick_start/pricing/",
+    "diff_status": "unchanged",
+    "note": "已核验官方当天峰值价，与 configs/pricing/deepseek-2026-08-21.yaml 一致；未变动。"
+  },
+  "decision": {
+    "allowed": true,
+    "buffered_cost": "13.11552000",
+    "hard_limit": "20",
+    "planned_calls": [
+      {
+        "count": 96,
+        "input_token_cap": 10188,
+        "model": "deepseek-v4-flash",
+        "output_token_cap": 3072,
+        "phase": "generation_with_repair",
+        "requests_per_case": 6
+      },
+      {
+        "count": 96,
+        "input_token_cap": 12420,
+        "model": "deepseek-v4-flash",
+        "output_token_cap": 1536,
+        "phase": "judge_with_repair",
+        "requests_per_case": 6
+      }
+    ],
+    "pricing_provider": "deepseek",
+    "pricing_rate_basis": "peak",
+    "pricing_source_url": "https://api-docs.deepseek.com/zh-cn/quick_start/pricing/",
+    "pricing_verified_at": "2026-08-21",
+    "reason": "allowed",
+    "threshold": "18.0",
+    "total_request_count": 1152,
+    "unbuffered_cost": "10.492416"
+  }
+}

@@ -1,0 +1,752 @@
+"""Hardened OpenAI-compatible chat and embedding provider."""
+
+from __future__ import annotations
+
+import json
+import os
+import random
+import re
+import time
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
+from typing import Any, NoReturn, Protocol
+
+import requests
+from pydantic import ValidationError
+
+from rag_quality_lab.domain.models import (
+    JudgeVerdict,
+    PairwiseVerdict,
+    ProviderResponse,
+    StructuredAnswer,
+    TokenUsage,
+)
+from rag_quality_lab.metrics.judge import (
+    build_pairwise_judge_prompt,
+    build_scalar_judge_prompt,
+    parse_judge_verdict,
+    parse_pairwise_verdict,
+)
+
+MAX_ERROR_LENGTH = 500
+GENERATION_INPUT_TOKEN_CAP = 2500
+GENERATION_OUTPUT_TOKEN_CAP = 512
+JUDGE_INPUT_TOKEN_CAP = 3500
+JUDGE_OUTPUT_TOKEN_CAP = 256
+MESSAGE_PROTOCOL_TOKEN_ALLOWANCE = 128
+REPAIR_PROMPT_TOKEN_ALLOWANCE = 384
+
+
+class HTTPResponse(Protocol):
+    @property
+    def status_code(self) -> int:
+        """HTTP status code."""
+
+    @property
+    def headers(self) -> Mapping[str, str]:
+        """Response headers."""
+
+    @property
+    def text(self) -> str:
+        """Response body text."""
+
+    def json(self) -> object:
+        """Decode the response body."""
+
+
+class HTTPSession(Protocol):
+    def post(
+        self,
+        url: str,
+        *,
+        json: dict[str, Any],
+        headers: dict[str, str],
+        timeout: float,
+    ) -> HTTPResponse:
+        """Submit one JSON request."""
+
+
+class RequestsSessionAdapter:
+    """Expose requests.Session through the narrow provider HTTP interface."""
+
+    def __init__(self) -> None:
+        self.session = requests.Session()
+
+    def post(
+        self,
+        url: str,
+        *,
+        json: dict[str, Any],
+        headers: dict[str, str],
+        timeout: float,
+    ) -> HTTPResponse:
+        response = self.session.post(url, json=json, headers=headers, timeout=timeout)
+        return RequestsResponseAdapter(response)
+
+
+class RequestsResponseAdapter:
+    """Normalize requests.Response attributes for the provider boundary."""
+
+    def __init__(self, response: requests.Response) -> None:
+        self.response = response
+
+    @property
+    def status_code(self) -> int:
+        return self.response.status_code
+
+    @property
+    def headers(self) -> Mapping[str, str]:
+        return dict(self.response.headers)
+
+    @property
+    def text(self) -> str:
+        return self.response.text
+
+    def json(self) -> object:
+        return self.response.json()
+
+
+class ProviderError(RuntimeError):
+    """Sanitized provider failure safe for experiment persistence."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        retryable: bool = False,
+        status_code: int | None = None,
+        http_request_count: int | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.retryable = retryable
+        self.status_code = status_code
+        self.http_request_count = http_request_count
+
+
+class AuthenticationError(ProviderError):
+    """Non-retryable authentication or authorization failure."""
+
+
+@dataclass
+class _RequestCounter:
+    """Operation-local physical HTTP attempt counter."""
+
+    count: int = 0
+
+
+class OpenAICompatibleProvider:
+    """Access chat completions and embeddings through an OpenAI-style API."""
+
+    def __init__(
+        self,
+        *,
+        base_url: str,
+        api_key_env: str,
+        timeout_seconds: float = 60,
+        max_retries: int = 2,
+        session: HTTPSession | None = None,
+        sleeper: Callable[[float], None] = time.sleep,
+        jitter: Callable[[], float] = random.random,
+        extra_body: Mapping[str, Any] | None = None,
+    ) -> None:
+        api_key = os.getenv(api_key_env)
+        if not api_key:
+            raise AuthenticationError(f"missing API key environment variable: {api_key_env}")
+        if timeout_seconds <= 0:
+            raise ValueError("timeout_seconds must be positive")
+        if max_retries < 0:
+            raise ValueError("max_retries must be non-negative")
+        self.base_url = base_url.rstrip("/")
+        self.cache_identity = f"openai-compatible:{self.base_url}"
+        self.api_key = api_key
+        self.timeout_seconds = timeout_seconds
+        self.max_retries = max_retries
+        self.session: HTTPSession = session or RequestsSessionAdapter()
+        self.sleeper = sleeper
+        self.jitter = jitter
+        self.extra_body = dict(extra_body or {})
+
+    def answer(
+        self,
+        question: str,
+        contexts: Sequence[str],
+        *,
+        model: str,
+        instructions: str | None = None,
+    ) -> ProviderResponse[StructuredAnswer]:
+        started_at = time.perf_counter()
+        request_counter = _RequestCounter()
+        primary = self._chat_completion(
+            model=model,
+            messages=self._bounded_messages(
+                self._answer_messages(question, contexts, instructions),
+                max_serialized_bytes=(
+                    GENERATION_INPUT_TOKEN_CAP - MESSAGE_PROTOCOL_TOKEN_ALLOWANCE
+                ),
+            ),
+            max_tokens=GENERATION_OUTPUT_TOKEN_CAP,
+            request_counter=request_counter,
+        )
+        usage = self._token_usage(
+            primary, http_request_count=request_counter.count
+        )
+        content = self._message_content(
+            primary, http_request_count=request_counter.count
+        )
+        final_payload = primary
+        try:
+            parsed = self._parse_answer(content)
+        except (json.JSONDecodeError, TypeError, ValidationError):
+            repaired = self._chat_completion(
+                model=model,
+                messages=self._bounded_messages(
+                    self._repair_messages(content),
+                    max_serialized_bytes=(
+                        GENERATION_OUTPUT_TOKEN_CAP
+                        + REPAIR_PROMPT_TOKEN_ALLOWANCE
+                        - MESSAGE_PROTOCOL_TOKEN_ALLOWANCE
+                    ),
+                ),
+                max_tokens=GENERATION_OUTPUT_TOKEN_CAP,
+                request_counter=request_counter,
+            )
+            usage = _combine_usage(
+                usage,
+                self._token_usage(
+                    repaired, http_request_count=request_counter.count
+                ),
+            )
+            final_payload = repaired
+            try:
+                parsed = self._parse_answer(
+                    self._message_content(
+                        repaired, http_request_count=request_counter.count
+                    )
+                )
+            except (json.JSONDecodeError, TypeError, ValidationError) as error:
+                self._raise_sanitized(
+                    f"structured answer validation failed: {error}",
+                    http_request_count=request_counter.count,
+                )
+
+        return ProviderResponse[StructuredAnswer](
+            parsed=parsed,
+            usage=usage,
+            model=model,
+            latency_ms=(time.perf_counter() - started_at) * 1000,
+            http_request_count=request_counter.count,
+            raw=final_payload,
+        )
+
+    def embed(
+        self, texts: Sequence[str], *, model: str | None = None
+    ) -> list[list[float]]:
+        if not model:
+            raise ValueError("embedding model is required")
+        request_counter = _RequestCounter()
+        payload = self._post_json(
+            "/embeddings",
+            {"model": model, "input": list(texts)},
+            request_counter=request_counter,
+        )
+        data = payload.get("data")
+        if not isinstance(data, list):
+            self._raise_sanitized(
+                "embedding response is missing data",
+                http_request_count=request_counter.count,
+            )
+        ordered: list[tuple[int, list[float]]] = []
+        for item in data:
+            if not isinstance(item, dict):
+                self._raise_sanitized(
+                    "embedding response contains an invalid item",
+                    http_request_count=request_counter.count,
+                )
+            index = item.get("index")
+            embedding = item.get("embedding")
+            if not isinstance(index, int) or not isinstance(embedding, list):
+                self._raise_sanitized(
+                    "embedding response contains invalid fields",
+                    http_request_count=request_counter.count,
+                )
+            ordered.append((index, [float(value) for value in embedding]))
+        ordered.sort(key=lambda item: item[0])
+        if len(ordered) != len(texts):
+            self._raise_sanitized(
+                "embedding response count does not match input",
+                http_request_count=request_counter.count,
+            )
+        return [embedding for _, embedding in ordered]
+
+    def judge(
+        self,
+        question: str,
+        reference_answer: str,
+        candidate_answer: str,
+        evidence: Sequence[str],
+        *,
+        model: str,
+    ) -> ProviderResponse[JudgeVerdict]:
+        """Score one answer using the fixed structured judge rubric."""
+
+        started_at = time.perf_counter()
+        request_counter = _RequestCounter()
+        prompt = build_scalar_judge_prompt(
+            question=question,
+            reference_answer=reference_answer,
+            candidate_answer=candidate_answer,
+            evidence=list(evidence),
+        )
+        primary = self._chat_completion(
+            model=model,
+            messages=self._bounded_messages(
+                [
+                    {
+                        "role": "system",
+                        "content": "Apply the supplied rubric. Return one JSON object only.",
+                    },
+                    {"role": "user", "content": prompt},
+                ],
+                max_serialized_bytes=(
+                    JUDGE_INPUT_TOKEN_CAP - MESSAGE_PROTOCOL_TOKEN_ALLOWANCE
+                ),
+            ),
+            max_tokens=JUDGE_OUTPUT_TOKEN_CAP,
+            request_counter=request_counter,
+        )
+        usage = self._token_usage(
+            primary, http_request_count=request_counter.count
+        )
+        final_payload = primary
+        try:
+            parsed = parse_judge_verdict(
+                self._message_content(
+                    primary, http_request_count=request_counter.count
+                )
+            )
+        except (json.JSONDecodeError, TypeError, ValidationError):
+            repaired = self._chat_completion(
+                model=model,
+                messages=self._bounded_messages(
+                    self._judge_repair_messages(self._message_content(primary)),
+                    max_serialized_bytes=(
+                        JUDGE_OUTPUT_TOKEN_CAP
+                        + REPAIR_PROMPT_TOKEN_ALLOWANCE
+                        - MESSAGE_PROTOCOL_TOKEN_ALLOWANCE
+                    ),
+                ),
+                max_tokens=JUDGE_OUTPUT_TOKEN_CAP,
+                request_counter=request_counter,
+            )
+            usage = _combine_usage(
+                usage,
+                self._token_usage(
+                    repaired, http_request_count=request_counter.count
+                ),
+            )
+            final_payload = repaired
+            try:
+                parsed = parse_judge_verdict(
+                    self._message_content(
+                        repaired, http_request_count=request_counter.count
+                    )
+                )
+            except (json.JSONDecodeError, TypeError, ValidationError) as error:
+                self._raise_sanitized(
+                    f"structured judge validation failed: {error}",
+                    http_request_count=request_counter.count,
+                )
+        return ProviderResponse[JudgeVerdict](
+            parsed=parsed,
+            usage=usage,
+            model=model,
+            latency_ms=(time.perf_counter() - started_at) * 1000,
+            http_request_count=request_counter.count,
+            raw=final_payload,
+        )
+
+    def pairwise(
+        self,
+        question: str,
+        reference_answer: str,
+        evidence: Sequence[str],
+        answer_a: str,
+        answer_b: str,
+        *,
+        model: str,
+    ) -> ProviderResponse[PairwiseVerdict]:
+        """Judge one presented A/B order with the same bounded-call contract."""
+
+        started_at = time.perf_counter()
+        request_counter = _RequestCounter()
+        prompt = build_pairwise_judge_prompt(
+            question=question,
+            reference_answer=reference_answer,
+            evidence=list(evidence),
+            answer_a=answer_a,
+            answer_b=answer_b,
+        )
+        primary = self._chat_completion(
+            model=model,
+            messages=self._bounded_messages(
+                [
+                    {
+                        "role": "system",
+                        "content": "Apply the pairwise rubric. Return one JSON object only.",
+                    },
+                    {"role": "user", "content": prompt},
+                ],
+                max_serialized_bytes=(
+                    JUDGE_INPUT_TOKEN_CAP - MESSAGE_PROTOCOL_TOKEN_ALLOWANCE
+                ),
+            ),
+            max_tokens=JUDGE_OUTPUT_TOKEN_CAP,
+            request_counter=request_counter,
+        )
+        usage = self._token_usage(
+            primary, http_request_count=request_counter.count
+        )
+        final_payload = primary
+        try:
+            parsed = parse_pairwise_verdict(
+                self._message_content(
+                    primary, http_request_count=request_counter.count
+                )
+            )
+        except (json.JSONDecodeError, TypeError, ValidationError):
+            repaired = self._chat_completion(
+                model=model,
+                messages=self._bounded_messages(
+                    self._pairwise_repair_messages(self._message_content(primary)),
+                    max_serialized_bytes=(
+                        JUDGE_OUTPUT_TOKEN_CAP
+                        + REPAIR_PROMPT_TOKEN_ALLOWANCE
+                        - MESSAGE_PROTOCOL_TOKEN_ALLOWANCE
+                    ),
+                ),
+                max_tokens=JUDGE_OUTPUT_TOKEN_CAP,
+                request_counter=request_counter,
+            )
+            usage = _combine_usage(
+                usage,
+                self._token_usage(
+                    repaired, http_request_count=request_counter.count
+                ),
+            )
+            final_payload = repaired
+            try:
+                parsed = parse_pairwise_verdict(
+                    self._message_content(
+                        repaired, http_request_count=request_counter.count
+                    )
+                )
+            except (json.JSONDecodeError, TypeError, ValidationError) as error:
+                self._raise_sanitized(
+                    f"pairwise judge validation failed: {error}",
+                    http_request_count=request_counter.count,
+                )
+        return ProviderResponse[PairwiseVerdict](
+            parsed=parsed,
+            usage=usage,
+            model=model,
+            latency_ms=(time.perf_counter() - started_at) * 1000,
+            http_request_count=request_counter.count,
+            raw=final_payload,
+        )
+
+    def _chat_completion(
+        self,
+        *,
+        model: str,
+        messages: list[dict[str, str]],
+        max_tokens: int,
+        request_counter: _RequestCounter,
+    ) -> dict[str, Any]:
+        body: dict[str, Any] = dict(self.extra_body)
+        body.update(
+            {
+                "model": model,
+                "messages": messages,
+                "max_tokens": max_tokens,
+                "response_format": {"type": "json_object"},
+            }
+        )
+        return self._post_json(
+            "/chat/completions", body, request_counter=request_counter
+        )
+
+    @staticmethod
+    def _bounded_messages(
+        messages: list[dict[str, str]], *, max_serialized_bytes: int
+    ) -> list[dict[str, str]]:
+        """Middle-truncate the last user message under a byte token bound."""
+
+        bounded = [dict(message) for message in messages]
+
+        def serialized_size() -> int:
+            return len(
+                json.dumps(
+                    bounded,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            )
+
+        if serialized_size() <= max_serialized_bytes:
+            return bounded
+        user_index = next(
+            (
+                index
+                for index in range(len(bounded) - 1, -1, -1)
+                if bounded[index].get("role") == "user"
+            ),
+            None,
+        )
+        if user_index is None:
+            raise ValueError("bounded messages require a user message")
+        original = bounded[user_index]["content"]
+        marker = "\n...[TRUNCATED TO INPUT CAP]...\n"
+
+        def truncated_content(length: int) -> str:
+            if length >= len(original):
+                return original
+            prefix_length = (length * 3) // 5
+            suffix_length = length - prefix_length
+            suffix = original[-suffix_length:] if suffix_length else ""
+            return original[:prefix_length] + marker + suffix
+
+        low = 0
+        high = len(original)
+        while low < high:
+            midpoint = (low + high + 1) // 2
+            bounded[user_index]["content"] = truncated_content(midpoint)
+            if serialized_size() <= max_serialized_bytes:
+                low = midpoint
+            else:
+                high = midpoint - 1
+        bounded[user_index]["content"] = truncated_content(low)
+        if serialized_size() > max_serialized_bytes:
+            raise ValueError("input cap is too small for the fixed prompt")
+        return bounded
+
+    def _post_json(
+        self,
+        path: str,
+        body: dict[str, Any],
+        *,
+        request_counter: _RequestCounter,
+    ) -> dict[str, Any]:
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+        for attempt in range(self.max_retries + 1):
+            request_counter.count += 1
+            try:
+                response = self.session.post(
+                    f"{self.base_url}{path}",
+                    json=body,
+                    headers=headers,
+                    timeout=self.timeout_seconds,
+                )
+            except requests.RequestException as error:
+                if attempt >= self.max_retries:
+                    self._raise_sanitized(
+                        f"network request failed: {error}",
+                        retryable=True,
+                        http_request_count=request_counter.count,
+                    )
+                self.sleeper(self._backoff(attempt, None))
+                continue
+
+            if response.status_code in {401, 403}:
+                raise AuthenticationError(
+                    self._sanitize(self._response_error(response)),
+                    status_code=response.status_code,
+                    http_request_count=request_counter.count,
+                )
+            retryable = response.status_code == 429 or response.status_code >= 500
+            if retryable:
+                if attempt >= self.max_retries:
+                    self._raise_sanitized(
+                        self._response_error(response),
+                        retryable=True,
+                        status_code=response.status_code,
+                        http_request_count=request_counter.count,
+                    )
+                self.sleeper(self._backoff(attempt, response.headers.get("Retry-After")))
+                continue
+            if response.status_code >= 400:
+                self._raise_sanitized(
+                    self._response_error(response),
+                    status_code=response.status_code,
+                    http_request_count=request_counter.count,
+                )
+            try:
+                payload = response.json()
+            except (TypeError, ValueError) as error:
+                self._raise_sanitized(
+                    f"provider response is not valid JSON: {error}",
+                    http_request_count=request_counter.count,
+                )
+            if not isinstance(payload, dict):
+                self._raise_sanitized(
+                    "provider response must be a JSON object",
+                    http_request_count=request_counter.count,
+                )
+            return payload
+        raise AssertionError("retry loop must return or raise")
+
+    def _backoff(self, attempt: int, retry_after: str | None) -> float:
+        if retry_after is not None:
+            try:
+                return max(0.0, float(retry_after))
+            except ValueError:
+                pass
+        return min(10.0, float(2**attempt)) + self.jitter()
+
+    def _response_error(self, response: HTTPResponse) -> str:
+        return response.text or f"provider returned HTTP {response.status_code}"
+
+    def _sanitize(self, message: str) -> str:
+        sanitized = message.replace(self.api_key, "[REDACTED]")
+        sanitized = re.sub(r"Bearer\s+\S+", "Bearer [REDACTED]", sanitized)
+        return sanitized[:MAX_ERROR_LENGTH]
+
+    def _raise_sanitized(
+        self,
+        message: str,
+        *,
+        retryable: bool = False,
+        status_code: int | None = None,
+        http_request_count: int = 0,
+    ) -> NoReturn:
+        raise ProviderError(
+            self._sanitize(message),
+            retryable=retryable,
+            status_code=status_code,
+            http_request_count=http_request_count,
+        )
+
+    @staticmethod
+    def _answer_messages(
+        question: str,
+        contexts: Sequence[str],
+        instructions: str | None,
+    ) -> list[dict[str, str]]:
+        context = "\n\n".join(contexts)
+        system_message = instructions or (
+            "Answer only from the supplied context. Return JSON with answer, citations, "
+            "and abstained. The answer must be a non-empty string and must not be null. "
+            "Abstain when evidence is insufficient."
+        )
+        return [
+            {
+                "role": "system",
+                "content": system_message,
+            },
+            {
+                "role": "user",
+                "content": f"Question:\n{question}\n\nContext:\n{context}",
+            },
+        ]
+
+    @staticmethod
+    def _repair_messages(content: str) -> list[dict[str, str]]:
+        return [
+            {
+                "role": "system",
+                "content": "Repair the content into valid JSON only; do not add new facts.",
+            },
+            {
+                "role": "user",
+                "content": (
+                    "Required keys: answer (non-empty string; must not be null), citations "
+                    f"(string array), abstained (boolean). Content:\n{content}"
+                ),
+            },
+        ]
+
+    @staticmethod
+    def _judge_repair_messages(content: str) -> list[dict[str, str]]:
+        return [
+            {
+                "role": "system",
+                "content": "Repair the content into valid JSON only; do not rescore it.",
+            },
+            {
+                "role": "user",
+                "content": (
+                    "Required keys: score (integer 1-5), passed (boolean equal to "
+                    f"score >= 4), reason (string). Content:\n{content}"
+                ),
+            },
+        ]
+
+    @staticmethod
+    def _pairwise_repair_messages(content: str) -> list[dict[str, str]]:
+        return [
+            {
+                "role": "system",
+                "content": "Repair the content into valid JSON only; do not reconsider it.",
+            },
+            {
+                "role": "user",
+                "content": (
+                    "Required keys: preferred (A, B, or tie), reason (non-empty "
+                    f"string). Content:\n{content}"
+                ),
+            },
+        ]
+
+    @staticmethod
+    def _message_content(
+        payload: dict[str, Any], *, http_request_count: int = 0
+    ) -> str:
+        try:
+            content = payload["choices"][0]["message"]["content"]
+        except (KeyError, IndexError, TypeError) as error:
+            raise ProviderError(
+                "chat response is missing message content",
+                http_request_count=http_request_count,
+            ) from error
+        if not isinstance(content, str):
+            raise ProviderError(
+                "chat response content must be text",
+                http_request_count=http_request_count,
+            )
+        return content
+
+    @staticmethod
+    def _parse_answer(content: str) -> StructuredAnswer:
+        return StructuredAnswer.model_validate(json.loads(content))
+
+    @staticmethod
+    def _token_usage(
+        payload: dict[str, Any], *, http_request_count: int = 0
+    ) -> TokenUsage:
+        usage = payload.get("usage", {})
+        if not isinstance(usage, dict):
+            raise ProviderError(
+                "chat response usage must be an object",
+                http_request_count=http_request_count,
+            )
+        return TokenUsage(
+            input_tokens=int(usage.get("prompt_tokens", 0)),
+            output_tokens=int(usage.get("completion_tokens", 0)),
+            input_cache_hit_tokens=int(usage.get("prompt_cache_hit_tokens", 0)),
+            input_cache_miss_tokens=int(usage.get("prompt_cache_miss_tokens", 0)),
+        )
+
+
+def _combine_usage(left: TokenUsage, right: TokenUsage) -> TokenUsage:
+    return TokenUsage(
+        input_tokens=left.input_tokens + right.input_tokens,
+        output_tokens=left.output_tokens + right.output_tokens,
+        input_cache_hit_tokens=(
+            left.input_cache_hit_tokens + right.input_cache_hit_tokens
+        ),
+        input_cache_miss_tokens=(
+            left.input_cache_miss_tokens + right.input_cache_miss_tokens
+        ),
+    )

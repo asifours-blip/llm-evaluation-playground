@@ -1,0 +1,138 @@
+"""Deterministic providers for offline evaluation and CI."""
+
+import hashlib
+import math
+from collections.abc import Mapping, Sequence
+from typing import Literal
+
+from rag_quality_lab.domain.models import (
+    JudgeVerdict,
+    PairwiseVerdict,
+    ProviderResponse,
+    StructuredAnswer,
+    TokenUsage,
+)
+
+
+class FakeEmbeddingProvider:
+    """Create stable normalized vectors by hashing whitespace tokens."""
+
+    def __init__(self, dimensions: int = 64) -> None:
+        if dimensions <= 0:
+            raise ValueError("dimensions must be positive")
+        self.dimensions = dimensions
+        self.cache_identity = f"fake-hash-v1:{dimensions}"
+
+    def embed(
+        self, texts: Sequence[str], *, model: str | None = None
+    ) -> list[list[float]]:
+        del model
+        return [self._embed_one(text) for text in texts]
+
+    def _embed_one(self, text: str) -> list[float]:
+        vector = [0.0] * self.dimensions
+        for token in text.casefold().split():
+            digest = hashlib.sha256(token.encode("utf-8")).digest()
+            index = int.from_bytes(digest[:4], "big") % self.dimensions
+            vector[index] += 1.0 if digest[4] % 2 == 0 else -1.0
+        norm = math.sqrt(sum(value * value for value in vector))
+        if norm == 0:
+            return vector
+        return [value / norm for value in vector]
+
+
+class FakeChatProvider:
+    """Return explicit scripted answers without network access."""
+
+    def __init__(self, answers: Mapping[str, StructuredAnswer]) -> None:
+        self.answers = dict(answers)
+
+    def answer(
+        self,
+        question: str,
+        contexts: Sequence[str],
+        *,
+        model: str,
+        instructions: str | None = None,
+    ) -> ProviderResponse[StructuredAnswer]:
+        del instructions
+        if question not in self.answers:
+            raise KeyError(f"Unscripted question: {question}")
+        parsed = self.answers[question].model_copy(deep=True)
+        input_text = " ".join([question, *contexts])
+        input_tokens = max(1, len(input_text.encode("utf-8")) // 4)
+        output_tokens = max(1, len(parsed.model_dump_json().encode("utf-8")) // 4)
+        return ProviderResponse[StructuredAnswer](
+            parsed=parsed,
+            usage=TokenUsage(input_tokens=input_tokens, output_tokens=output_tokens),
+            model=model,
+            http_request_count=0,
+        )
+
+
+class FakeJudgeProvider:
+    """Return a deterministic verdict for offline workflow verification."""
+
+    def judge(
+        self,
+        question: str,
+        reference_answer: str,
+        candidate_answer: str,
+        evidence: Sequence[str],
+        *,
+        model: str,
+    ) -> ProviderResponse[JudgeVerdict]:
+        exact = candidate_answer.strip().casefold() == reference_answer.strip().casefold()
+        verdict = JudgeVerdict(
+            score=5 if exact else 2,
+            passed=exact,
+            reason="exact reference match" if exact else "candidate differs from reference",
+        )
+        input_text = " ".join(
+            [question, reference_answer, candidate_answer, *evidence]
+        )
+        return ProviderResponse[JudgeVerdict](
+            parsed=verdict,
+            usage=TokenUsage(
+                input_tokens=max(1, len(input_text.encode("utf-8")) // 4),
+                output_tokens=max(
+                    1, len(verdict.model_dump_json().encode("utf-8")) // 4
+                ),
+            ),
+            model=model,
+            http_request_count=0,
+        )
+
+    def pairwise(
+        self,
+        question: str,
+        reference_answer: str,
+        evidence: Sequence[str],
+        answer_a: str,
+        answer_b: str,
+        *,
+        model: str,
+    ) -> ProviderResponse[PairwiseVerdict]:
+        a_exact = answer_a.strip().casefold() == reference_answer.strip().casefold()
+        b_exact = answer_b.strip().casefold() == reference_answer.strip().casefold()
+        preferred: Literal["A", "B", "tie"] = "tie"
+        if a_exact and not b_exact:
+            preferred = "A"
+        elif b_exact and not a_exact:
+            preferred = "B"
+        verdict = PairwiseVerdict(
+            preferred=preferred,
+            reason="deterministic reference comparison",
+        )
+        input_text = " ".join(
+            [question, reference_answer, answer_a, answer_b, *evidence]
+        )
+        return ProviderResponse[PairwiseVerdict](
+            parsed=verdict,
+            usage=TokenUsage(
+                input_tokens=max(1, len(input_text.encode("utf-8")) // 4),
+                output_tokens=max(1, len(verdict.model_dump_json().encode("utf-8")) // 4),
+            ),
+            model=model,
+            http_request_count=0,
+        )

@@ -1,0 +1,13 @@
+{
+  "artifact_type": "human_calibration_protocol",
+  "version": "reference-answer-v1",
+  "experiment_id": "d212f35b-3482-4e52-9490-338be5520511",
+  "sample_manifest": "docs/artifacts/sample_manifest.json",
+  "template": "docs/artifacts/blind_label_template-reference-answer-v1.csv",
+  "human_scoring_target": "Answer correctness relative to the provided reference answer; use context as supporting evidence.",
+  "judge_score_visibility": "hidden",
+  "supersedes": {
+    "artifact": "docs/artifacts/calibrate-2026-08-21.json",
+    "reason": "The prior context-only human rubric did not match the judge's reference-answer correctness rubric and is not calibration-eligible."
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "config_path": "../../configs/offline.yaml",
+  "baseline_report_path": "../../docs/artifacts/offline-summary.json",
+  "rules": [
+    {"metric": "retrieval_recall_at_k", "minimum_delta": -0.02},
+    {"metric": "retrieval_mrr", "minimum_delta": -0.02},
+    {"metric": "answer_f1", "minimum_delta": -0.01},
+    {"metric": "false_answer_rate", "maximum_delta": 0.0},
+    {"metric": "over_abstention_rate", "maximum_delta": 0.0},
+    {"metric": "failure_count", "maximum_delta": 0.0}
+  ]
+}

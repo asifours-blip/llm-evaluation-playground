@@ -1,0 +1,18 @@
+{
+  "artifact_type": "independent_human_adjudication",
+  "experiment_id": "d212f35b-3482-4e52-9490-338be5520511",
+  "protocol": "reference-answer-v1",
+  "row": 2,
+  "sample_id": "fecb6bdc33c8023b8fd5be6f",
+  "original_human_label": {
+    "score": 1,
+    "reason": "完全偏离延迟汇总和 retrieval miss/生成失败区分，转而讨论可复现性记录流程。",
+    "status": "preserved_not_selected"
+  },
+  "independent_reviewer_label": {
+    "score": 2,
+    "reason": "模型输出主要在讲实验记录的可复现性（commit、哈希、配置、种子）和报告生成形式，完全没有提到 mean / P50 / P95 延迟，也没有区分 retrieval miss 与“已有证据后的生成失败”，关键诊断连接点全部缺失，属于明显偏题。",
+    "reviewer_saw_judge_score": false,
+    "status": "selected_for_current_calibration"
+  }
+}
