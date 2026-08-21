@@ -8,6 +8,7 @@ import random
 import re
 import time
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from typing import Any, NoReturn, Protocol
 
 import requests
@@ -114,14 +115,23 @@ class ProviderError(RuntimeError):
         *,
         retryable: bool = False,
         status_code: int | None = None,
+        http_request_count: int = 0,
     ) -> None:
         super().__init__(message)
         self.retryable = retryable
         self.status_code = status_code
+        self.http_request_count = http_request_count
 
 
 class AuthenticationError(ProviderError):
     """Non-retryable authentication or authorization failure."""
+
+
+@dataclass
+class _RequestCounter:
+    """Operation-local physical HTTP attempt counter."""
+
+    count: int = 0
 
 
 class OpenAICompatibleProvider:
@@ -165,6 +175,7 @@ class OpenAICompatibleProvider:
         instructions: str | None = None,
     ) -> ProviderResponse[StructuredAnswer]:
         started_at = time.perf_counter()
+        request_counter = _RequestCounter()
         primary = self._chat_completion(
             model=model,
             messages=self._bounded_messages(
@@ -174,9 +185,14 @@ class OpenAICompatibleProvider:
                 ),
             ),
             max_tokens=GENERATION_OUTPUT_TOKEN_CAP,
+            request_counter=request_counter,
         )
-        usage = self._token_usage(primary)
-        content = self._message_content(primary)
+        usage = self._token_usage(
+            primary, http_request_count=request_counter.count
+        )
+        content = self._message_content(
+            primary, http_request_count=request_counter.count
+        )
         final_payload = primary
         try:
             parsed = self._parse_answer(content)
@@ -192,19 +208,33 @@ class OpenAICompatibleProvider:
                     ),
                 ),
                 max_tokens=GENERATION_OUTPUT_TOKEN_CAP,
+                request_counter=request_counter,
             )
-            usage = _combine_usage(usage, self._token_usage(repaired))
+            usage = _combine_usage(
+                usage,
+                self._token_usage(
+                    repaired, http_request_count=request_counter.count
+                ),
+            )
             final_payload = repaired
             try:
-                parsed = self._parse_answer(self._message_content(repaired))
+                parsed = self._parse_answer(
+                    self._message_content(
+                        repaired, http_request_count=request_counter.count
+                    )
+                )
             except (json.JSONDecodeError, TypeError, ValidationError) as error:
-                self._raise_sanitized(f"structured answer validation failed: {error}")
+                self._raise_sanitized(
+                    f"structured answer validation failed: {error}",
+                    http_request_count=request_counter.count,
+                )
 
         return ProviderResponse[StructuredAnswer](
             parsed=parsed,
             usage=usage,
             model=model,
             latency_ms=(time.perf_counter() - started_at) * 1000,
+            http_request_count=request_counter.count,
             raw=final_payload,
         )
 
@@ -213,25 +243,39 @@ class OpenAICompatibleProvider:
     ) -> list[list[float]]:
         if not model:
             raise ValueError("embedding model is required")
+        request_counter = _RequestCounter()
         payload = self._post_json(
             "/embeddings",
             {"model": model, "input": list(texts)},
+            request_counter=request_counter,
         )
         data = payload.get("data")
         if not isinstance(data, list):
-            self._raise_sanitized("embedding response is missing data")
+            self._raise_sanitized(
+                "embedding response is missing data",
+                http_request_count=request_counter.count,
+            )
         ordered: list[tuple[int, list[float]]] = []
         for item in data:
             if not isinstance(item, dict):
-                self._raise_sanitized("embedding response contains an invalid item")
+                self._raise_sanitized(
+                    "embedding response contains an invalid item",
+                    http_request_count=request_counter.count,
+                )
             index = item.get("index")
             embedding = item.get("embedding")
             if not isinstance(index, int) or not isinstance(embedding, list):
-                self._raise_sanitized("embedding response contains invalid fields")
+                self._raise_sanitized(
+                    "embedding response contains invalid fields",
+                    http_request_count=request_counter.count,
+                )
             ordered.append((index, [float(value) for value in embedding]))
         ordered.sort(key=lambda item: item[0])
         if len(ordered) != len(texts):
-            self._raise_sanitized("embedding response count does not match input")
+            self._raise_sanitized(
+                "embedding response count does not match input",
+                http_request_count=request_counter.count,
+            )
         return [embedding for _, embedding in ordered]
 
     def judge(
@@ -246,6 +290,7 @@ class OpenAICompatibleProvider:
         """Score one answer using the fixed structured judge rubric."""
 
         started_at = time.perf_counter()
+        request_counter = _RequestCounter()
         prompt = build_scalar_judge_prompt(
             question=question,
             reference_answer=reference_answer,
@@ -267,11 +312,18 @@ class OpenAICompatibleProvider:
                 ),
             ),
             max_tokens=JUDGE_OUTPUT_TOKEN_CAP,
+            request_counter=request_counter,
         )
-        usage = self._token_usage(primary)
+        usage = self._token_usage(
+            primary, http_request_count=request_counter.count
+        )
         final_payload = primary
         try:
-            parsed = parse_judge_verdict(self._message_content(primary))
+            parsed = parse_judge_verdict(
+                self._message_content(
+                    primary, http_request_count=request_counter.count
+                )
+            )
         except (json.JSONDecodeError, TypeError, ValidationError):
             repaired = self._chat_completion(
                 model=model,
@@ -284,18 +336,32 @@ class OpenAICompatibleProvider:
                     ),
                 ),
                 max_tokens=JUDGE_OUTPUT_TOKEN_CAP,
+                request_counter=request_counter,
             )
-            usage = _combine_usage(usage, self._token_usage(repaired))
+            usage = _combine_usage(
+                usage,
+                self._token_usage(
+                    repaired, http_request_count=request_counter.count
+                ),
+            )
             final_payload = repaired
             try:
-                parsed = parse_judge_verdict(self._message_content(repaired))
+                parsed = parse_judge_verdict(
+                    self._message_content(
+                        repaired, http_request_count=request_counter.count
+                    )
+                )
             except (json.JSONDecodeError, TypeError, ValidationError) as error:
-                self._raise_sanitized(f"structured judge validation failed: {error}")
+                self._raise_sanitized(
+                    f"structured judge validation failed: {error}",
+                    http_request_count=request_counter.count,
+                )
         return ProviderResponse[JudgeVerdict](
             parsed=parsed,
             usage=usage,
             model=model,
             latency_ms=(time.perf_counter() - started_at) * 1000,
+            http_request_count=request_counter.count,
             raw=final_payload,
         )
 
@@ -312,6 +378,7 @@ class OpenAICompatibleProvider:
         """Judge one presented A/B order with the same bounded-call contract."""
 
         started_at = time.perf_counter()
+        request_counter = _RequestCounter()
         prompt = build_pairwise_judge_prompt(
             question=question,
             reference_answer=reference_answer,
@@ -334,11 +401,18 @@ class OpenAICompatibleProvider:
                 ),
             ),
             max_tokens=JUDGE_OUTPUT_TOKEN_CAP,
+            request_counter=request_counter,
         )
-        usage = self._token_usage(primary)
+        usage = self._token_usage(
+            primary, http_request_count=request_counter.count
+        )
         final_payload = primary
         try:
-            parsed = parse_pairwise_verdict(self._message_content(primary))
+            parsed = parse_pairwise_verdict(
+                self._message_content(
+                    primary, http_request_count=request_counter.count
+                )
+            )
         except (json.JSONDecodeError, TypeError, ValidationError):
             repaired = self._chat_completion(
                 model=model,
@@ -351,18 +425,32 @@ class OpenAICompatibleProvider:
                     ),
                 ),
                 max_tokens=JUDGE_OUTPUT_TOKEN_CAP,
+                request_counter=request_counter,
             )
-            usage = _combine_usage(usage, self._token_usage(repaired))
+            usage = _combine_usage(
+                usage,
+                self._token_usage(
+                    repaired, http_request_count=request_counter.count
+                ),
+            )
             final_payload = repaired
             try:
-                parsed = parse_pairwise_verdict(self._message_content(repaired))
+                parsed = parse_pairwise_verdict(
+                    self._message_content(
+                        repaired, http_request_count=request_counter.count
+                    )
+                )
             except (json.JSONDecodeError, TypeError, ValidationError) as error:
-                self._raise_sanitized(f"pairwise judge validation failed: {error}")
+                self._raise_sanitized(
+                    f"pairwise judge validation failed: {error}",
+                    http_request_count=request_counter.count,
+                )
         return ProviderResponse[PairwiseVerdict](
             parsed=parsed,
             usage=usage,
             model=model,
             latency_ms=(time.perf_counter() - started_at) * 1000,
+            http_request_count=request_counter.count,
             raw=final_payload,
         )
 
@@ -372,6 +460,7 @@ class OpenAICompatibleProvider:
         model: str,
         messages: list[dict[str, str]],
         max_tokens: int,
+        request_counter: _RequestCounter,
     ) -> dict[str, Any]:
         body: dict[str, Any] = dict(self.extra_body)
         body.update(
@@ -382,7 +471,9 @@ class OpenAICompatibleProvider:
                 "response_format": {"type": "json_object"},
             }
         )
-        return self._post_json("/chat/completions", body)
+        return self._post_json(
+            "/chat/completions", body, request_counter=request_counter
+        )
 
     @staticmethod
     def _bounded_messages(
@@ -438,12 +529,19 @@ class OpenAICompatibleProvider:
             raise ValueError("input cap is too small for the fixed prompt")
         return bounded
 
-    def _post_json(self, path: str, body: dict[str, Any]) -> dict[str, Any]:
+    def _post_json(
+        self,
+        path: str,
+        body: dict[str, Any],
+        *,
+        request_counter: _RequestCounter,
+    ) -> dict[str, Any]:
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
         }
         for attempt in range(self.max_retries + 1):
+            request_counter.count += 1
             try:
                 response = self.session.post(
                     f"{self.base_url}{path}",
@@ -453,7 +551,11 @@ class OpenAICompatibleProvider:
                 )
             except requests.RequestException as error:
                 if attempt >= self.max_retries:
-                    self._raise_sanitized(f"network request failed: {error}", retryable=True)
+                    self._raise_sanitized(
+                        f"network request failed: {error}",
+                        retryable=True,
+                        http_request_count=request_counter.count,
+                    )
                 self.sleeper(self._backoff(attempt, None))
                 continue
 
@@ -461,6 +563,7 @@ class OpenAICompatibleProvider:
                 raise AuthenticationError(
                     self._sanitize(self._response_error(response)),
                     status_code=response.status_code,
+                    http_request_count=request_counter.count,
                 )
             retryable = response.status_code == 429 or response.status_code >= 500
             if retryable:
@@ -469,6 +572,7 @@ class OpenAICompatibleProvider:
                         self._response_error(response),
                         retryable=True,
                         status_code=response.status_code,
+                        http_request_count=request_counter.count,
                     )
                 self.sleeper(self._backoff(attempt, response.headers.get("Retry-After")))
                 continue
@@ -476,13 +580,20 @@ class OpenAICompatibleProvider:
                 self._raise_sanitized(
                     self._response_error(response),
                     status_code=response.status_code,
+                    http_request_count=request_counter.count,
                 )
             try:
                 payload = response.json()
             except (TypeError, ValueError) as error:
-                self._raise_sanitized(f"provider response is not valid JSON: {error}")
+                self._raise_sanitized(
+                    f"provider response is not valid JSON: {error}",
+                    http_request_count=request_counter.count,
+                )
             if not isinstance(payload, dict):
-                self._raise_sanitized("provider response must be a JSON object")
+                self._raise_sanitized(
+                    "provider response must be a JSON object",
+                    http_request_count=request_counter.count,
+                )
             return payload
         raise AssertionError("retry loop must return or raise")
 
@@ -508,11 +619,13 @@ class OpenAICompatibleProvider:
         *,
         retryable: bool = False,
         status_code: int | None = None,
+        http_request_count: int = 0,
     ) -> NoReturn:
         raise ProviderError(
             self._sanitize(message),
             retryable=retryable,
             status_code=status_code,
+            http_request_count=http_request_count,
         )
 
     @staticmethod
@@ -587,13 +700,21 @@ class OpenAICompatibleProvider:
         ]
 
     @staticmethod
-    def _message_content(payload: dict[str, Any]) -> str:
+    def _message_content(
+        payload: dict[str, Any], *, http_request_count: int = 0
+    ) -> str:
         try:
             content = payload["choices"][0]["message"]["content"]
         except (KeyError, IndexError, TypeError) as error:
-            raise ProviderError("chat response is missing message content") from error
+            raise ProviderError(
+                "chat response is missing message content",
+                http_request_count=http_request_count,
+            ) from error
         if not isinstance(content, str):
-            raise ProviderError("chat response content must be text")
+            raise ProviderError(
+                "chat response content must be text",
+                http_request_count=http_request_count,
+            )
         return content
 
     @staticmethod
@@ -601,10 +722,15 @@ class OpenAICompatibleProvider:
         return StructuredAnswer.model_validate(json.loads(content))
 
     @staticmethod
-    def _token_usage(payload: dict[str, Any]) -> TokenUsage:
+    def _token_usage(
+        payload: dict[str, Any], *, http_request_count: int = 0
+    ) -> TokenUsage:
         usage = payload.get("usage", {})
         if not isinstance(usage, dict):
-            raise ProviderError("chat response usage must be an object")
+            raise ProviderError(
+                "chat response usage must be an object",
+                http_request_count=http_request_count,
+            )
         return TokenUsage(
             input_tokens=int(usage.get("prompt_tokens", 0)),
             output_tokens=int(usage.get("completion_tokens", 0)),

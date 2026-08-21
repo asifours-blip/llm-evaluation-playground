@@ -66,6 +66,7 @@ class FakeChatProvider:
             parsed=parsed,
             usage=TokenUsage(input_tokens=input_tokens, output_tokens=output_tokens),
             model=model,
+            http_request_count=0,
         )
 
 
@@ -99,6 +100,7 @@ class FakeJudgeProvider:
                 ),
             ),
             model=model,
+            http_request_count=0,
         )
 
     def pairwise(
@@ -132,4 +134,5 @@ class FakeJudgeProvider:
                 output_tokens=max(1, len(verdict.model_dump_json().encode("utf-8")) // 4),
             ),
             model=model,
+            http_request_count=0,
         )

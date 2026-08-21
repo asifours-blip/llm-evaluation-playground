@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import pytest
+import requests
 
 from rag_quality_lab.providers.openai_compatible import (
     AuthenticationError,
@@ -172,6 +173,60 @@ def test_malformed_answer_gets_one_repair_attempt(
     response = provider.answer("q", [], model="m")
 
     assert response.parsed.answer == "fixed"
+    assert response.http_request_count == 2
+    assert len(session.calls) == 2
+
+
+def test_retry_and_repair_count_every_http_attempt(
+    make_provider: Callable[..., OpenAICompatibleProvider],
+) -> None:
+    session = FakeSession(
+        [
+            FakeResponse(500, {"error": "retry"}, text="retry"),
+            answer_response("not json"),
+            answer_response(
+                '{"answer":"fixed","citations":[],"abstained":false}'
+            ),
+        ]
+    )
+    provider = make_provider(session=session, sleeper=lambda _: None)
+
+    response = provider.answer("q", [], model="m")
+
+    assert response.http_request_count == 3
+    assert len(session.calls) == 3
+
+
+def test_exhausted_retries_expose_attempt_count(
+    make_provider: Callable[..., OpenAICompatibleProvider],
+) -> None:
+    session = FakeSession(
+        [
+            FakeResponse(500, {"error": "first"}, text="first"),
+            FakeResponse(500, {"error": "second"}, text="second"),
+        ]
+    )
+    provider = make_provider(session=session, sleeper=lambda _: None)
+
+    with pytest.raises(ProviderError) as error:
+        provider.answer("q", [], model="m")
+
+    assert error.value.http_request_count == 2
+    assert len(session.calls) == 2
+
+
+def test_exhausted_network_errors_expose_attempt_count(
+    make_provider: Callable[..., OpenAICompatibleProvider],
+) -> None:
+    session = FakeSession(
+        [requests.ConnectionError("first"), requests.ConnectionError("second")]
+    )
+    provider = make_provider(session=session, sleeper=lambda _: None)
+
+    with pytest.raises(ProviderError) as error:
+        provider.answer("q", [], model="m")
+
+    assert error.value.http_request_count == 2
     assert len(session.calls) == 2
 
 

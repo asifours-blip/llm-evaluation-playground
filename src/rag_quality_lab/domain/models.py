@@ -291,6 +291,7 @@ class ProviderResponse(BaseModel, Generic[ResponseT]):
     usage: TokenUsage
     model: str
     latency_ms: float = Field(default=0, ge=0)
+    http_request_count: int | None = Field(default=None, ge=0)
     raw: dict[str, Any] | None = None
 
 
@@ -363,6 +364,7 @@ class CaseResult(BaseModel):
     judge: JudgeVerdict | None = None
     judge_model: str | None = None
     judge_usage: TokenUsage | None = None
+    http_request_count: int | None = Field(default=None, ge=0)
     latency_ms: float = Field(default=0, ge=0)
     cost: Decimal = Field(default=Decimal("0"), ge=0)
     cost_estimated: bool = False

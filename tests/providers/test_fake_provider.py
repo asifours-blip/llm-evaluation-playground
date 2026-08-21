@@ -38,6 +38,7 @@ def test_scripted_chat_returns_structured_answer() -> None:
 
     assert response.parsed.answer.startswith("Retrieval")
     assert response.usage.total_tokens > 0
+    assert response.http_request_count == 0
     assert isinstance(provider, ChatProvider)
 
 
@@ -62,4 +63,5 @@ def test_fake_judge_scores_exact_reference_deterministically() -> None:
     assert response.parsed.score == 5
     assert response.parsed.passed
     assert response.usage.total_tokens > 0
+    assert response.http_request_count == 0
     assert isinstance(provider, JudgeProvider)
