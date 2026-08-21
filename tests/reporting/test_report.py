@@ -158,3 +158,33 @@ def test_final_report_requires_eligible_human_calibration(tmp_path: Path) -> Non
         ),
     )
     assert json.loads(paths.json.read_text(encoding="utf-8"))["badge"] == "final"
+
+
+def test_final_report_requires_complete_http_request_evidence(tmp_path: Path) -> None:
+    live = example_experiment().model_copy(
+        update={
+            "identity": example_experiment().identity.model_copy(
+                update={"mode": "live"}
+            )
+        }
+    )
+    live.case_results[0].http_request_count = None
+    calibration = CalibrationResult(
+        label_count=12,
+        exact_agreement=1,
+        within_one_rate=1,
+        mean_absolute_error=0,
+        blocking_eligible=True,
+        reason="agreement thresholds met",
+    )
+
+    pilot_paths = generate_reports(live, tmp_path / "pilot")
+    assert json.loads(pilot_paths.json.read_text(encoding="utf-8"))["badge"] == "pilot"
+
+    with pytest.raises(ValueError, match="HTTP request"):
+        generate_reports(
+            live,
+            tmp_path / "final",
+            badge="final",
+            calibration=calibration,
+        )

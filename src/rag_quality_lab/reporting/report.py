@@ -89,6 +89,8 @@ def _validate_final_evidence(
         raise ValueError("final evidence requires a clean git identity")
     if any(result.status != "completed" for result in experiment.case_results):
         raise ValueError("final evidence cannot contain failed cases")
+    if any(result.http_request_count is None for result in experiment.case_results):
+        raise ValueError("final evidence requires complete HTTP request counts")
     if calibration is None or not calibration.blocking_eligible:
         raise ValueError("final evidence requires eligible human judge calibration")
 
