@@ -6,15 +6,15 @@
 
 - 构建本地优先的 RAG 评测平台，将检索、生成、拒答与系统指标拆分度量；在 12 篇文档、48 道版本化问题和 8 组检索配置上完成 384 个确定性 case-arm 运行，零执行失败，并导出可追溯 JSON/HTML 报告。
 - 设计可复现实验身份，持久化 commit SHA、工作树状态、数据集/Prompt 哈希、随机种子、完整配置、逐题命中、token、延迟和成本；采用 SQLite WAL 与主线程单写协调并发 runner，避免跑批和报告读取互相阻塞。
-- 实现日期化价格证据、全矩阵 token 上限预检、1.25× 安全缓冲、逐请求成本预留/结算和 ¥20 硬预算停止机制；DeepSeek 示例的 96 次生成 + 96 次 Judge 高峰最坏预检为 ¥1.959552，缓冲后 ¥2.449440。
-- 建立 Python 3.11 CI 门禁，结合 Ruff、strict mypy、真实回归 fixture 和聚焦纯逻辑 branch coverage；领域、配置、指标、预算和比较模块覆盖率达到 97.30%，且 CI 不读取 API Key、不调用付费模型。
+- 实现日期化价格证据、请求级输入/输出硬上限、修复与重试 headroom、1.25× 安全缓冲和 ¥20 预算闸门；DeepSeek 示例按最坏 1,152 次 HTTP 尝试预检，峰值价 ¥10.492416，缓冲后 ¥13.115520。
+- 建立 Python 3.11 CI 门禁，结合 Ruff、全包 strict mypy、真实 384-case pipeline 回归和聚焦 branch coverage；领域、配置、指标、预算和比较模块覆盖率达到 95.16%，且 CI 不读取 API Key、不调用付费模型。
 
 ## English: currently usable (M1 software evidence)
 
 - Built a local-first RAG evaluation platform that separates retrieval, generation, abstention, and system metrics; executed 384 deterministic case-arms across 12 documents, 48 versioned questions, and 8 retrieval configurations with zero pipeline failures and auditable JSON/HTML reports.
 - Designed reproducible experiment identities covering commit/dirty state, dataset and prompt hashes, seed, full configuration, per-case retrieval hits, tokens, latency, and cost; coordinated concurrent provider work with a single SQLite WAL writer.
-- Implemented dated pricing evidence, full-matrix token-cap preflight, a 1.25× safety buffer, per-call reservation/settlement, and a CNY 20 hard stop; the DeepSeek example's 96 generation plus 96 judge calls preflight at CNY 1.959552 unbuffered and CNY 2.449440 buffered under peak rates.
-- Enforced a Python 3.11 quality gate with Ruff, strict mypy, a real regression fixture, and focused branch coverage; pure domain/config/metric/budget/comparison logic reached 97.30% without paid API calls in CI.
+- Implemented dated pricing evidence, request-level input/output caps, repair/retry headroom, a 1.25× safety buffer, and a CNY 20 budget gate; the DeepSeek example reserves 1,152 worst-case HTTP attempts at CNY 10.492416 peak, or CNY 13.115520 buffered.
+- Enforced a Python 3.11 quality gate with Ruff, package-wide strict mypy, a real 384-case pipeline regression, and 95.16% focused branch coverage without paid API calls in CI.
 
 ## 不可写成“模型效果”的数字
 

@@ -1,6 +1,8 @@
 # RAG Quality Lab Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **Status note (2026-08-21):** This file preserves the original execution plan and its unchecked boxes are not the live project tracker. M1 is verified; M2 code paths are implemented, while a paid run and independent human labels remain external prerequisites. Current commands and evidence are in the root README.
+
+> **Historical execution instruction:** Steps use checkbox (`- [ ]`) syntax from the original build plan.
 
 **Goal:** Build a local-first, reproducible RAG evaluation platform with separated retrieval/generation metrics, persisted experiments, budget-safe live runs, baseline regression checks, and evidence-backed reports.
 

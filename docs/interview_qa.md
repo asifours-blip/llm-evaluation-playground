@@ -14,7 +14,7 @@ Demo 只能说明“某次回答看起来能用”，不能定位错误来自检
 
 ## Q4：无答案题怎么评分？
 
-除通用答案指标外，单独计算 abstention accuracy、precision/recall/F1、false-answer rate 和 over-abstention rate。false answer 是无证据却回答，风险通常高于普通答错；over-abstention 是有证据却拒答，影响可用性。两者不能用一个平均 F1 混掉。
+除通用答案指标外，单独计算 abstention accuracy、precision/recall/F1、false-answer rate 和 over-abstention rate。有效拒答必须同时满足结构化 `abstained=true` 和正文明确表达证据不足，不能靠一个布尔位掩盖实质性回答；答案 F1/EM 只在可回答题上汇总。false answer 与 over-abstention 也不能用一个平均 F1 混掉。
 
 ## Q5：为什么 12 篇文档不用向量数据库？
 
@@ -26,7 +26,7 @@ Demo 只能说明“某次回答看起来能用”，不能定位错误来自检
 
 ## Q7：如何保证实验可复现？
 
-每次运行保存 commit SHA、dirty 标志、数据集哈希、Prompt 哈希、随机种子、Python 版本和完整配置；document、chunk、case 和 retrieval config 都有稳定 ID。逐题结果与报告规范化序列化并计算 SHA-256。对于 live 模型，我会明确“输入可复现”不等于“输出逐字确定”，需要重复实验处理随机性。
+每次运行保存 commit SHA、dirty 标志、数据集哈希、Prompt 哈希、随机种子、Python/关键依赖版本、生成参数和完整配置；embedding cache key 还包含 provider/endpoint identity。document、chunk、case 和 retrieval config 都有稳定 ID，报告规范化序列化并计算 SHA-256。对于 live 模型，我会明确“输入可复现”不等于“输出逐字确定”。
 
 ## Q8：为什么用 SQLite，如何处理并发锁？
 
@@ -34,15 +34,15 @@ Demo 只能说明“某次回答看起来能用”，不能定位错误来自检
 
 ## Q9：预算 20 元如何保证不超？
 
-不是先假设 20 元够，而是读取带核验日期和官方 URL 的价格 YAML，按总调用数 × 每次输入/输出 token 上限计算 cache-miss 最坏成本，再乘 1.25 安全系数；缓冲成本必须低于硬上限的 90%。运行中每次调度前预留上限成本，收到 usage 后结算实际成本，下一次预留可能越线就停止并持久化 `budget_exceeded`。
+不是先假设 20 元够，而是读取带核验日期和官方 URL 的价格 YAML。请求发送前会截断序列化输入并设置 `max_tokens`；预检把主调用、一次结构修复和 `max_retries + 1` 次尝试全部计入 cache-miss 最坏成本，再乘 1.25 安全系数。完整矩阵缓冲成本超过 90% 阈值时零请求退出，运行中则先预留、后按 usage 结算。
 
 ## Q10：Provider 错误与密钥如何处理？
 
-Key 只按配置的环境变量名读取，不写入配置。401/403 立即失败；429、5xx 和网络错误做有界指数退避；错误文本会替换 Key 和 Bearer token，并限制持久化长度。结构化回答解析失败只允许一次“修复为 JSON”调用，仍失败就记录明确错误，不继续猜字段。
+Key 只按配置的环境变量名读取，不写入配置。401/403 不重试；429、5xx 和网络错误做有界指数退避；错误文本会替换 Key 和 Bearer token，并限制持久化长度。检索、生成、指标和 Judge 异常按阶段落成失败 case，其他题继续；已知 usage 按实结算，已尝试但 usage 不可得的阶段按预留上限保守记账。结构化解析只允许一次 JSON 修复。
 
 ## Q11：LLM-as-Judge 如何减少偏差？
 
-Judge 输出必须满足 1–5 分 schema，`passed` 与分数阈值强绑定。Pairwise 辅助流程用 A/B 和 B/A 两种顺序各评一次；归一化结果不一致就标记 position-sensitive。更关键的是，Judge 不能自证可靠：至少取 12 条盲标与人工比较，within-one rate ≥ 0.80 且 MAE ≤ 1.0 后才允许参与阻断门禁。
+Judge 输出必须满足 1–5 分 schema，`passed` 与分数阈值强绑定。可执行的 pairwise 命令用 A/B 和 B/A 两种顺序各评一次，将 usage、成本、reason 与 position-sensitive 结果持久化；归一化不一致的样本不计入胜率。更关键的是，Judge 不能自证可靠：至少 12 条分层 opaque 盲标达到 within-one ≥ 0.80、MAE ≤ 1.0 后才允许参与阻断门禁。
 
 ## Q12：现在有 Judge 与人工一致率吗？
 
@@ -50,11 +50,11 @@ Judge 输出必须满足 1–5 分 schema，`passed` 与分数阈值强绑定。
 
 ## Q13：为什么覆盖率只卡纯逻辑模块？
 
-领域、配置、指标、预算和比较逻辑适合穷举边界，当前聚焦 branch coverage 为 97.30%。HTTP、CLI、SQLite 与模板属于胶水边界，用行为集成测试验证。若为了全仓数字给每条网络路径堆 mock，覆盖率会上升，但不会增加真实可靠性。
+领域、配置、指标、预算和比较逻辑适合穷举边界，当前聚焦 branch coverage 为 95.16%。Provider、CLI、SQLite 与模板边界用行为集成测试验证；全包 strict mypy 另行覆盖类型边界。为了全仓数字给每条网络路径堆 mock，不会增加真实可靠性。
 
 ## Q14：如何避免 CI 回归 fixture 造假？
 
-Fixture 保存完整的 baseline/candidate `ExperimentRecord` 和规则。CLI 必须解析它们，调用生产 `compare_experiments` 与 `evaluate_regression` 再决定退出码；不是读取一个手写的 `passed: true`。因此改变比较方向、缺失指标或越过阈值都会让 CI 失败。
+Fixture 只保存真实配置、提交的 384-case baseline 报告路径和规则。CI 在临时目录完整重跑当前 48×8 pipeline，再按 `(case_id, config_id, model)` 比较；检索、runner、指标或 prompt 退化都会改变候选产物。它不是把一条手写 baseline/candidate 复制两遍，更不是读取 `passed: true`。
 
 ## Q15：Mock 运行到底证明了什么、没证明什么？
 

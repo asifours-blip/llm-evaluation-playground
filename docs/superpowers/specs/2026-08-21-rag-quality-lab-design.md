@@ -308,13 +308,13 @@ Rules:
 - generation input is capped at 2,500 estimated tokens and output at 512 tokens;
 - judge input is capped at 3,500 estimated tokens and output at 256 tokens;
 - thinking/reasoning mode is disabled unless an experiment explicitly evaluates it;
-- the preflight estimate is multiplied by 1.25 for retries and estimation error;
+- main calls, one structured repair, and every configured retry are reserved explicitly; the resulting estimate is then multiplied by 1.25 for remaining estimation/provider uncertainty;
 - no request is sent when the buffered estimate exceeds 90% of the configured budget;
 - actual cost is accumulated from provider usage after each response;
 - scheduling stops before the hard budget is exceeded;
 - completed partial results are persisted with `budget_exceeded` status.
 
-The official DeepSeek direct price page re-verified on 2026-08-21 uses time-tiered CNY pricing. During Beijing peak hours (09:00–12:00 and 14:00–18:00), Flash cache-hit input/cache-miss input/output cost RMB 0.10/3/9 per million tokens and Pro costs RMB 0.30/9/27; all three rates are half-price outside those windows. Hard-budget preflight deliberately uses peak rates as the worst case. With Flash for the 36-call pilot, 96 Flash plus 96 Pro final-generation calls, and Pro for 192 judge calls, the 420-call plan costs RMB 12.460464 before buffering and RMB 15.575580 after the 1.25 multiplier, excluding embeddings. The buffered estimate remains below the RMB 18 preflight threshold for a RMB 20 hard limit. This value is dated design evidence only; every live run must re-verify current official pricing.
+The official DeepSeek direct price page re-verified on 2026-08-21 uses time-tiered CNY pricing. During Beijing peak hours (09:00–12:00 and 14:00–18:00), Flash cache-hit input/cache-miss input/output cost RMB 0.10/3/9 per million tokens and Pro costs RMB 0.30/9/27; all three rates are half-price outside those windows. Hard-budget preflight deliberately uses peak rates as the worst case. The executable example currently covers 96 case-arms with Flash generation and Flash scalar judging. Once main calls, one repair, and two configured retries are reserved for both stages, its maximum is 1,152 HTTP attempts: RMB 10.492416 before buffering and RMB 13.115520 after the 1.25 multiplier, excluding fake local embeddings. The buffered estimate remains below the RMB 18 preflight threshold for a RMB 20 hard limit. This dated evidence does not replace a fresh price check before any live run.
 
 SiliconFlow may be used for a free development model and free BGE embeddings when the account is eligible. Its fixed free-model rate limits are treated as an operational constraint, not a cost guarantee for other hosted models.
 

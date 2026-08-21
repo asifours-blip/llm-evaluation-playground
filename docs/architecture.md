@@ -80,11 +80,11 @@ SQLite 开启 WAL、foreign keys 和 5 秒 busy timeout。这个设计允许报�
 Live 运行的安全链条如下：
 
 1. 读取日期化价格文件，校验币种、模型与价格新鲜度；
-2. 按完整调用数、输入/输出 token 上限计算最坏 cache-miss 成本；
+2. 对序列化输入执行保守字节上界、对输出发送 `max_tokens`，并把主调用、一次修复和全部有界重试计入最坏 cache-miss 成本；
 3. 乘安全系数，必须低于硬预算的预检比例；
 4. 用户显式传入 `--confirm-live-run` 后才构造需要 Key 的 provider；
-5. 每个任务调度前预留最坏成本，完成后按 provider usage 结算；
-6. 下一次预留可能越过硬上限时停止调度，并持久化 `budget_exceeded`。
+5. 每个任务调度前原子预留生成与 Judge 的最坏成本，完成后按 provider usage 结算；失败时结算已知 usage，只对已经尝试但 usage 不可得的阶段按预留上限估算；
+6. 完整矩阵的缓冲预检不通过时零请求退出；运行中下一次预留可能越过硬上限时停止调度并持久化 `budget_exceeded`。
 
 价格证据是历史快照，不覆盖更新。真实运行前必须从官方来源新增当日价格文件。
 
@@ -92,15 +92,17 @@ Live 运行的安全链条如下：
 
 Judge 辅助模块固定 1–5 分结构化 schema，`score >= 4` 与 `passed=true` 是模型不变量。Pairwise 比较对 A/B 和 B/A 各评一次；若归一化偏好不一致，标为 position-sensitive，不输出赢家。
 
-人工标注导出会物理移除模型、配置和 Judge 分数，只保留 `case_id::config_id` 形式的稳定 sample key、问题、参考答案、候选答案和 Judge 实际看到的检索证据。至少 12 条完整盲标，且 within-one rate ≥ 0.80、MAE ≤ 1.0 时，Judge 才具备回归阻断资格。当前仓库没有真实人工标注产物，所以不能宣称 Judge 已可靠。
+人工标注导出按可回答性、类别、难度、配置和模型做带种子的轮转分层，物理移除模型、配置、原始 case ID 和 Judge 分数，只保留 opaque sample ID、问题、参考答案、候选答案和 Judge 实际看到的检索证据。SQLite 私下保存 source mapping 与内容哈希，导入时拒绝跨实验或被修改的快照。至少 12 条完整盲标，且 within-one rate ≥ 0.80、MAE ≤ 1.0 时，Judge 才具备回归阻断资格。当前仓库没有真实人工标注产物，所以不能宣称 Judge 已可靠。
+
+Pairwise 不是未接线的 helper：CLI 对匹配的 `(case_id, model)` 输出执行 A/B 与 B/A 两次调用，预算、usage、成本、reason 和 position-sensitive 状态进入 SQLite 与规范化 JSON。位置敏感样本不进入胜率分子。`final` badge 同样不是自由输入，只有 live、完成、clean、零失败且校准达标的实验才允许生成。
 
 ## 测试策略
 
-- `domain/config/metrics/budget/compare` 纯逻辑执行 branch coverage 门禁，当前为 97.30%；
+- `domain/config/metrics/budget/compare` 聚焦逻辑执行 branch coverage 门禁，当前为 95.16%；
 - provider 用窄 HTTP session fake 验证重试、鉴权、脱敏、结构化修复和 usage 解析；
 - runner/store/report/CLI 用集成测试验证真实文件、SQLite、子进程和报告行为；
 - CI 排除 `live` marker，不读取 Key、不产生付费请求；
-- 固定回归 fixture 必须经过实际比较算法，不能靠写死 `passed: true`。
+- 固定回归 fixture 指向提交的 384-case 基线产物；CI 会在临时目录完整重跑当前 pipeline 再比较，不能靠嵌入相同的手写 baseline/candidate 或写死 `passed: true`。
 
 ## 已知限制与演进条件
 
