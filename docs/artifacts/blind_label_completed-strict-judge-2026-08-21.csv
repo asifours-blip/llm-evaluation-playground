@@ -1,0 +1,719 @@
+﻿prompt,reference_answer,output,context,human_score,reason
+What purpose does chunk overlap serve?,It repeats boundary text so edge-split facts can still be retrieved.,"Chunk overlap serves to preserve context between chunks, mitigating the loss of context that occurs with small chunks while avoiding the dilution of similarity scores that can happen with large chunks.","Small chunks improve targeting but lose context, while large chunks preserve context but may dilute similarity scores.
+
+## Example
+
+A 400-character chunk with 50-character overlap advances by 350 characters after each split.
+
+## Limitations
+
+One chunk size cannot be assumed optimal for every documen
+
+---
+
+ improves reproducibility, but aggressive cleanup can remove tables, headings, or other useful structure.
+
+## Example
+
+An ingestion job stores the source path, document ID, title, and SHA-256 content hash for every Markdown file.
+
+## Limitations
+
+Parsing rules are format-specific, and scanned docume
+
+---
+
+# Document Ingestion
+
+ID: doc-02
+
+## Definition
+
+Ingestion converts source files into normalized documents with stable IDs and metadata.
+A content hash detects changes without depending on file modification times.
+
+## Trade-offs
+
+Strict normalization improves reproducibility, but aggressive cleanup 
+
+---
+
+e-offs
+
+Larger embedding models may improve semantic separation, but they increase latency, storage, and migration cost.
+
+## Example
+
+The vector for a cached chunk is reused only when both its text hash and embedding-model identifier match.
+
+## Limitations
+
+Cosine similarity reflects vector geometry",2,输出偏离参考核心含义，未提及重复边界文本使跨边界事实仍可检索，转而讨论上下文保留与 chunk 大小权衡。
+What should happen between candidate retrieval and a grounded final answer?,"A reranker can reorder candidates, then a grounded prompt restricts the model to supplied evidence and stable citations.","Between candidate retrieval and a grounded final answer, a reranker should be applied to the candidate set to select the most relevant chunks for the prompt. This is supported by the context which describes a reranker scoring the retrieved candidates and selecting the best ones for the prompt, while noting that it cannot recover documents absent from the candidate set.","# Dense Retrieval
+
+ID: doc-05
+
+## Definition
+
+Dense retrieval ranks chunks by cosine similarity between query and chunk embeddings.
+Recall@K measures whether at least one expected document appears in the first K retrieval results.
+
+## Trade-offs
+
+Increasing top K can improve recall, but it consumes prompt tokens and may introduce distracting evidence.
+
+## Example
+
+If an expected document is ranked third, Recall@3 is one and reciprocal rank is one third.
+
+## Limitations
+
+Dense retrieval can miss exact identifiers and rare terms that lexical retrieval handles well.
+
+
+---
+
+# RAG Evaluation
+
+ID: doc-08
+
+## Definition
+
+Retrieval metrics and generation metrics must be reported separately to localize failures.
+MRR rewards systems that place the first relevant result near the top of the ranking.
+
+## Trade-offs
+
+Reference metrics are repeatable and cheap, while model judges cover nuance but introduce cost and evaluator bias.
+
+## Example
+
+A run can have high Recall@5 and low answer correctness, showing that generation failed despite available evidence.
+
+## Limitations
+
+Aggregate scores hide case-level regressions unless reports preserve individual outcomes.
+
+
+---
+
+# Candidate Reranking
+
+ID: doc-06
+
+## Definition
+
+A reranker reorders a small candidate set using a query-document relevance model.
+Reranking improves precision only when the first-stage retriever already includes useful evidence.
+
+## Trade-offs
+
+Cross-encoder rerankers inspect query-document pairs more deeply, but add one scoring operation per candidate.
+
+## Example
+
+A retriever returns 20 chunks, a reranker scores those 20, and the prompt receives the best 4.
+
+## Limitations
+
+A reranker cannot recover a relevant document that was absent from the candidate set.
+
+
+---
+
+# Grounded Prompting
+
+ID: doc-07
+
+## Definition
+
+A grounded prompt tells the model to answer only from supplied evidence and to cite stable document IDs.
+The evidence-first variant asks the model to list supporting facts before composing the final answer.
+
+## Trade-offs
+
+More instructions can improve format adherence, but they consume context and may conflict with one another.
+
+## Example
+
+The response contract contains an answer string, a citation list, and an abstained boolean.
+
+## Limitations
+
+Prompt instructions reduce unsupported answers but do not provide a hard factual guarantee.
+",3,reranker 部分基本准确，但遗漏 grounded prompt 仅依赖给定证据并引用稳定 ID 的关键约束。
+What was the company's revenue last quarter?,The controlled corpus contains no company financial results.,"The content is invalid because the answer field is null, which violates the requirement that answer must be a non-empty string. The abstained flag is true, but the answer must still be provided. Please provide a valid answer."," recover a relevant document that was absent from the candidate set.
+
+
+---
+
+# RAG Evaluation
+
+ID: doc-08
+
+## Definition
+
+Retrieval metrics and generation metrics must be reported separately to localize failures.
+MRR rewards systems that place the first relevant result near the top of the ranking.
+
+## Trade-offs
+
+Reference metrics are repeatable and cheap, while model judges
+
+---
+
+ss-encoder rerankers inspect query-document pairs more deeply, but add one scoring operation per candidate.
+
+## Example
+
+A retriever returns 20 chunks, a reranker scores those 20, and the prompt receives the best 4.
+
+## Limitations
+
+A reranker cannot recover a relevant document that was absent from 
+
+---
+
+# Grounded Prompting
+
+ID: doc-07
+
+## Definition
+
+A grounded prompt tells the model to answer only from supplied evidence and to cite stable document IDs.
+The evidence-first variant asks the model to list supporting facts before composing the final answer.
+
+## Trade-offs
+
+More instructions can improv",1,输出没有回答问题，只描述 answer=null 的格式错误，未按参考正确拒答。
+What legal retention period applies to user prompts in China?,The controlled corpus does not provide legal advice or retention requirements.,,"# Grounded Prompting
+
+ID: doc-07
+
+## Definition
+
+A grounded prompt tells the model to answer only from supplied evidence and to cite stable document IDs.
+The evidence-first variant asks the model to list supporting facts before composing the final answer.
+
+## Trade-offs
+
+More instructions can improv
+
+---
+
+sing rules are format-specific, and scanned documents require a separate OCR step.
+
+
+---
+
+# Dense Retrieval
+
+ID: doc-05
+
+## Definition
+
+Dense retrieval ranks chunks by cosine similarity between query and chunk embeddings.
+Recall@K measures whether at least one expected document appears in the first K retrieval results.
+
+## Trade-offs
+
+Increasing top K can improve recall, but it consumes 
+
+---
+
+ss-encoder rerankers inspect query-document pairs more deeply, but add one scoring operation per candidate.
+
+## Example
+
+A retriever returns 20 chunks, a reranker scores those 20, and the prompt receives the best 4.
+
+## Limitations
+
+A reranker cannot recover a relevant document that was absent from ",2,仅输出空字符串，未说明语料不提供法律建议或保留要求，信息不足。
+What chunk size is guaranteed to maximize answer accuracy?,The corpus describes chunk-size trade-offs but gives no universally optimal value.,The context does not specify a chunk size that guarantees maximum answer accuracy.,"# Failure Taxonomy
+
+ID: doc-11
+
+## Definition
+
+A retrieval miss occurs when expected evidence is absent from the retrieved context.
+A generation failure occurs when evidence is present but the answer is incorrect, unsupported, or malformed.
+
+## Trade-offs
+
+Fine-grained labels improve diagnosis, but annotation takes longer and ambiguous cases need adjudication.
+
+## Example
+
+When Recall@K is zero, the case is retrieval-limited; when Recall@K is one and correctness fails, it is generation-limited.
+
+## Limitations
+
+Some failures have multiple causes, so a taxonomy should preserve evidence instead 
+
+---
+
+# Dense Retrieval
+
+ID: doc-05
+
+## Definition
+
+Dense retrieval ranks chunks by cosine similarity between query and chunk embeddings.
+Recall@K measures whether at least one expected document appears in the first K retrieval results.
+
+## Trade-offs
+
+Increasing top K can improve recall, but it consumes prompt tokens and may introduce distracting evidence.
+
+## Example
+
+If an expected document is ranked third, Recall@3 is one and reciprocal rank is one third.
+
+## Limitations
+
+Dense retrieval can miss exact identifiers and rare terms that lexical retrieval handles well.
+
+
+---
+
+# Abstention Evaluation
+
+ID: doc-09
+
+## Definition
+
+Abstention means explicitly declining to answer when the controlled corpus lacks sufficient evidence.
+False-answer rate is the fraction of unanswerable cases that receive a substantive answer.
+
+## Trade-offs
+
+Aggressive abstention reduces hallucinations but can reject answerable questions, so over-abstention must also be measured.
+
+## Example
+
+For an unsupported pricing question, the system returns an empty citation list and sets abstained to true.
+
+## Limitations
+
+String matching alone cannot reliably distinguish a cautious answer from a rea
+
+---
+
+, not factual correctness or permission to answer.
+",5,与参考完全一致，正确说明无普适最优 chunk size。
+What two constraints does a grounded prompt place on an answer?,Use only supplied evidence and cite stable document IDs.,"A grounded prompt places two constraints on an answer: it must answer only from supplied evidence, and it must cite stable document IDs.","# Grounded Prompting
+
+ID: doc-07
+
+## Definition
+
+A grounded prompt tells the model to answer only from supplied evidence and to cite stable document IDs.
+The evidence-first variant asks the model to list supporting facts before composing the final answer.
+
+## Trade-offs
+
+More instructions can improve format adherence, but they consume context and may conflict with one another.
+
+## Example
+
+The response contract contains an answer string, a citation list, and an abstained boolean.
+
+## Limitations
+
+Prompt instructions reduce unsupported answers but do not provide a hard factual guarantee.
+
+
+---
+
+cannot compensate for a provider that silently changes a model behind the same identifier.
+
+
+---
+
+# Candidate Reranking
+
+ID: doc-06
+
+## Definition
+
+A reranker reorders a small candidate set using a query-document relevance model.
+Reranking improves precision only when the first-stage retriever already includes useful evidence.
+
+## Trade-offs
+
+Cross-encoder rerankers inspect query-document pairs more deeply, but add one scoring operation per candidate.
+
+## Example
+
+A retriever returns 20 chunks, a reranker scores those 20, and the prompt receives the best 4.
+
+## Limitations
+
+A reranker cannot recover a relevant document that was absent from the candidate set.
+
+
+---
+
+# RAG System Overview
+
+ID: doc-01
+
+## Definition
+
+Retrieval-augmented generation (RAG) retrieves external evidence before an LLM writes an answer.
+A RAG request normally includes ingestion, retrieval, prompt construction, generation, and evaluation.
+
+## Trade-offs
+
+RAG can update knowledge without retraining the generator, but it adds retrieval latency and another source of failure.
+
+## Example
+
+A support assistant retrieves two product-policy passages and cites them in its response.
+
+## Limitations
+
+RAG does not guarantee correctness when the corpus is incomplete, retrieval misses evidence, o",5,与参考完全一致。
+What does the evidence-first prompt variant ask the model to do first?,List supporting facts before composing the final answer.,The evidence-first variant asks the model to list supporting facts before composing the final answer.,"# Grounded Prompting
+
+ID: doc-07
+
+## Definition
+
+A grounded prompt tells the model to answer only from supplied evidence and to cite stable document IDs.
+The evidence-first variant asks the model to list supporting facts before composing the final answer.
+
+## Trade-offs
+
+More instructions can improv
+
+---
+
+ions
+
+RAG does not guarantee correctness when the corpus is incomplete, retrieval misses evidence, or the generator ignores context.
+
+
+---
+
+# RAG Evaluation
+
+ID: doc-08
+
+## Definition
+
+Retrieval metrics and generation metrics must be reported separately to localize failures.
+MRR rewards systems that place the first relevant result near the top of the ranking.
+
+## Trade-offs
+
+Reference metrics are repeatable and cheap, while model judges
+
+---
+
+# Reproducible Deployment
+
+ID: doc-12
+
+## Definition
+
+A reproducible run records the commit SHA, dataset hash, prompt hash, configuration, model IDs, and random seed.
+SQLite WAL mode lets readers continue while a coordinator serializes experiment writes.
+
+## Trade-offs
+
+Local SQLite keeps deployment",5,与参考完全一致。
+Which stages normally make up a RAG request?,"Ingestion, retrieval, prompt construction, generation, and evaluation.","Based on the provided context, the stages of a RAG request are not explicitly described. The context discusses candidate reranking and reproducible deployment, but does not outline the typical stages of a RAG request."," reliably distinguish a cautious answer from a real abstention.
+
+
+---
+
+# Candidate Reranking
+
+ID: doc-06
+
+## Definition
+
+A reranker reorders a small candidate set using a query-document relevance model.
+Reranking improves precision only when the first-stage retriever already includes useful evidence.
+
+## Trade-offs
+
+Cross-encoder rerankers inspect query-document pairs more deeply, but add one scoring operation per candidate.
+
+## Example
+
+A retriever returns 20 chunks, a reranker scores those 20, and the prompt receives the best 4.
+
+## Limitations
+
+A reranker cannot recover a relevant document that was absent from the candidate set.
+
+
+---
+
+cannot compensate for a provider that silently changes a model behind the same identifier.
+
+
+---
+
+# Reproducible Deployment
+
+ID: doc-12
+
+## Definition
+
+A reproducible run records the commit SHA, dataset hash, prompt hash, configuration, model IDs, and random seed.
+SQLite WAL mode lets readers continue while a coordinator serializes experiment writes.
+
+## Trade-offs
+
+Local SQLite keeps deployment simple, but it is not a substitute for a distributed high-write database.
+
+## Example
+
+The runner writes case results first, then generates static JSON and HTML reports from the committed experiment record.
+
+## Limitations
+
+Reproducibility metadata cannot compensate for a provider that silently cha",1,参考明确列出五个阶段，输出错误拒答，属于漏检索或误判。
+What does retrieval-augmented generation do before writing an answer?,It retrieves external evidence before the LLM writes an answer.,Retrieval-augmented generation (RAG) retrieves external evidence before an LLM writes an answer.,"# RAG System Overview
+
+ID: doc-01
+
+## Definition
+
+Retrieval-augmented generation (RAG) retrieves external evidence before an LLM writes an answer.
+A RAG request normally includes ingestion, retrieval, prompt construction, generation, and evaluation.
+
+## Trade-offs
+
+RAG can update knowledge without r
+
+---
+
+ions
+
+RAG does not guarantee correctness when the corpus is incomplete, retrieval misses evidence, or the generator ignores context.
+
+
+---
+
+
+## Trade-offs
+
+RAG can update knowledge without retraining the generator, but it adds retrieval latency and another source of failure.
+
+## Example
+
+A support assistant retrieves two product-policy passages and cites them in its response.
+
+## Limitations
+
+RAG does not guarantee correctness when the 
+
+---
+
+# RAG Evaluation
+
+ID: doc-08
+
+## Definition
+
+Retrieval metrics and generation metrics must be reported separately to localize failures.
+MRR rewards systems that place the first relevant result near the top of the ranking.
+
+## Trade-offs
+
+Reference metrics are repeatable and cheap, while model judges",5,与参考完全一致。
+What does a reranker do?,It reorders a small candidate set with a query-document relevance model.,A reranker reorders a small candidate set using a query-document relevance model. It improves precision only when the first-stage retriever already includes useful evidence. Cross-encoder rerankers inspect query-document pairs more deeply but add one scoring operation per candidate. A reranker cannot recover a relevant document that was absent from the candidate set.,"# Candidate Reranking
+
+ID: doc-06
+
+## Definition
+
+A reranker reorders a small candidate set using a query-document relevance model.
+Reranking improves precision only when the first-stage retriever already includes useful evidence.
+
+## Trade-offs
+
+Cross-encoder rerankers inspect query-document pairs more deeply, but add one scoring operation per candidate.
+
+## Example
+
+A retriever returns 20 chunks, a reranker scores those 20, and the prompt receives the best 4.
+
+## Limitations
+
+A reranker cannot recover a relevant document that was absent from the candidate set.
+
+
+---
+
+ reliably distinguish a cautious answer from a real abstention.
+
+
+---
+
+cannot compensate for a provider that silently changes a model behind the same identifier.
+
+
+---
+
+# Reproducible Deployment
+
+ID: doc-12
+
+## Definition
+
+A reproducible run records the commit SHA, dataset hash, prompt hash, configuration, model IDs, and random seed.
+SQLite WAL mode lets readers continue while a coordinator serializes experiment writes.
+
+## Trade-offs
+
+Local SQLite keeps deployment simple, but it is not a substitute for a distributed high-write database.
+
+## Example
+
+The runner writes case results first, then generates static JSON and HTML reports from the committed experiment record.
+
+## Limitations
+
+Reproducibility metadata cannot compensate for a provider that silently cha",5,与参考一致且补充了合理的正确细节。
+How does dense retrieval rank chunks?,By cosine similarity between query and chunk embeddings.,Dense retrieval ranks chunks by cosine similarity between query and chunk embeddings.,"# Dense Retrieval
+
+ID: doc-05
+
+## Definition
+
+Dense retrieval ranks chunks by cosine similarity between query and chunk embeddings.
+Recall@K measures whether at least one expected document appears in the first K retrieval results.
+
+## Trade-offs
+
+Increasing top K can improve recall, but it consumes 
+
+---
+
+# RAG Evaluation
+
+ID: doc-08
+
+## Definition
+
+Retrieval metrics and generation metrics must be reported separately to localize failures.
+MRR rewards systems that place the first relevant result near the top of the ranking.
+
+## Trade-offs
+
+Reference metrics are repeatable and cheap, while model judges
+
+---
+
+ions
+
+RAG does not guarantee correctness when the corpus is incomplete, retrieval misses evidence, or the generator ignores context.
+
+
+---
+
+reasing top K can improve recall, but it consumes prompt tokens and may introduce distracting evidence.
+
+## Example
+
+If an expected document is ranked third, Recall@3 is one and reciprocal rank is one third.
+
+## Limitations
+
+Dense retrieval can miss exact identifiers and rare terms that lexical retr",5,与参考完全一致。
+Which safeguards address hallucination risk and spending risk?,Measure false answers on unsupported cases and run a buffered cost preflight using verified prices.,"The provided context does not explicitly mention safeguards for hallucination risk or spending risk. However, it discusses cost and latency controls, including conservative preflight estimates and budget limits, which relate to spending risk. For hallucination risk, the context mentions RAG and limitations of cosine similarity, but does not specify safeguards.","# Cost and Latency Controls
+
+ID: doc-10
+
+## Definition
+
+A conservative preflight estimate multiplies bounded token counts by verified prices and a safety multiplier.
+Latency reports should include mean, P50, and P95 rather than only an average.
+
+## Trade-offs
+
+Parallel requests reduce wall-clock time but increase rate-limit pressure and complicate ordered persistence.
+
+## Example
+
+A runner refuses to start when its buffered estimate exceeds ninety percent of the configured hard budget.
+
+## Limitations
+
+Token estimates and published prices can drift, so live runs must record actual usage and pr
+
+---
+
+# RAG System Overview
+
+ID: doc-01
+
+## Definition
+
+Retrieval-augmented generation (RAG) retrieves external evidence before an LLM writes an answer.
+A RAG request normally includes ingestion, retrieval, prompt construction, generation, and evaluation.
+
+## Trade-offs
+
+RAG can update knowledge without retraining the generator, but it adds retrieval latency and another source of failure.
+
+## Example
+
+A support assistant retrieves two product-policy passages and cites them in its response.
+
+## Limitations
+
+RAG does not guarantee correctness when the corpus is incomplete, retrieval misses evidence, o
+
+---
+
+# Embeddings and Caching
+
+ID: doc-04
+
+## Definition
+
+An embedding maps text to a numeric vector so semantic similarity can be computed.
+Embedding caches must include the model name, normalized text hash, and preprocessing version in the key.
+
+## Trade-offs
+
+Larger embedding models may improve semantic separation, but they increase latency, storage, and migration cost.
+
+## Example
+
+The vector for a cached chunk is reused only when both its text hash and embedding-model identifier match.
+
+## Limitations
+
+Cosine similarity reflects vector geometry, not factual correctness or permission to answer.
+
+---
+
+# Document Ingestion
+
+ID: doc-02
+
+## Definition
+
+Ingestion converts source files into normalized documents with stable IDs and metadata.
+A content hash detects changes without depending on file modification times.
+
+## Trade-offs
+
+Strict normalization improves reproducibility, but aggressive cleanup can remove tables, headings, or other useful structure.
+
+## Example
+
+An ingestion job stores the source path, document ID, title, and SHA-256 content hash for every Markdown file.
+
+## Limitations
+
+Parsing rules are format-specific, and scanned documents require a separate OCR step.
+",1,参考给出幻觉与成本防护，输出错误声称未明确提及，属于漏检索或误判。

@@ -1,62 +1,65 @@
-﻿# 面试 Q&A 预备
+# RAG Quality Lab — Interview Q&A
 
-针对「LLM 应用评测与快速原型工具」项目可能被追问的问题，及回答要点。
+## Q1：为什么不直接展示一个 RAG 问答 Demo？
 
-## Q1：为什么要做这个工具？
+Demo 只能说明“某次回答看起来能用”，不能定位错误来自检索还是生成，也不能证明换一组参数真的改善了系统。这个项目把评测对象定义成可复现实验：固定数据、Prompt、代码和配置，分别量化检索、答案、拒答、延迟、token、成本和失败。
 
-**要点**：学习 Prompt Engineering 时，需调多个大模型对比 Prompt 效果，手动逐个调用、人工看答案太低效，做了自动化框架。一次配置就能跑三种策略 × N 个样本，自动出量化报告。
+## Q2：数据集如何避免只测容易的有答案题？
 
-## Q2：三种 Prompt 策略的区别是什么？
+48 题由 24 道单文档、12 道多文档、6 道显式域外和 6 道“主题相关但知识库无证据”的 plausible-unsupported 问题组成。后两类迫使系统区分“不知道”和“凭常识能编”，否则会漏掉 RAG 最危险的假答案模式。
 
-- **Zero-shot**：不给示例，直接问。测模型零样本能力。
-- **Few-shot**：给几个示例，让模型照着风格答。适合格式/风格敏感的任务。
-- **Chain-of-Thought (CoT)**：要求模型「一步步思考再给结论」。适合推理类任务，通常能提升正确率。
+## Q3：为什么把检索与生成指标分开？
 
-## Q3：为什么用 OpenAI 兼容接口？
+答案错可能是没检到、检到了但上下文截断、模型没遵守证据，或者本应拒答却编了。只看最终答案无法归因。项目先算 Recall@k、MRR、reference evidence context-hit，再算 exact match、双语 token F1 和 embedding 相似度；面试时可以用逐题命中解释哪一层失败。
 
-一套代码兼容 DeepSeek / Qwen / GPT / 硅基流动等多种模型，A/B 对比时只改 `model` 参数，不用改调用逻辑。是行业事实标准。
+## Q4：无答案题怎么评分？
 
-## Q4：两个评分指标是怎么设计的？为什么要两个？
+除通用答案指标外，单独计算 abstention accuracy、precision/recall/F1、false-answer rate 和 over-abstention rate。有效拒答必须同时满足结构化 `abstained=true` 和正文明确表达证据不足，不能靠一个布尔位掩盖实质性回答；答案 F1/EM 只在可回答题上汇总。false answer 与 over-abstention 也不能用一个平均 F1 混掉。
 
-- **语义相似度**：模型回答和参考答案的 embedding 余弦相似度（0-1）。能容忍表述差异（「北京」vs「中国的首都是北京」仍得高分），防「答非所问」。
-- **LLM-as-Judge**：让强模型对回答质量打 1-5 分。捕捉相似度反映不了的逻辑正确性（字面像但推理错的情况）。
+## Q5：为什么 12 篇文档不用向量数据库？
 
-两指标互补：单用相似度会被「抄参考答案的变形」骗过；单用 Judge 不稳定且贵。组合更可靠。
+内存暴力余弦检索已经足够快，依赖更少、索引行为更透明，也更容易通过内容哈希复现。引入向量数据库会多出服务、schema、持久卷和版本变量，却不会提升这个规模下的评测可信度。语料或并发达到内存方案瓶颈时，再替换窄 `InMemoryIndex` 接口。
 
-## Q5：怎么保证测试不烧钱？
+## Q6：当前检索只有约 0.47 Recall@k，是不是项目效果很差？
 
-`tests/conftest.py` 和各测试文件里用 `unittest.mock.Mock` 替换了模型客户端和 embedding 函数：
-- `MockLLMClient.chat` 返回构造好的假回答
-- `fake_embed` 返回 md5 生成的确定性向量
+这是刻意保留的确定性哈希 embedding 弱基线，不是宣传指标。它的价值是让离线 CI 可重复、零成本，并证明报告会如实暴露弱检索，而不是让完美 mock 答案掩盖它。真实模型质量结论必须来自 M2 的生产 embedding/生成模型 benchmark。
 
-所以 38 个测试跑一次零成本，覆盖率 97%。真实评测才用真 Key。
+## Q7：如何保证实验可复现？
 
-## Q6：重试机制怎么处理的？
+每次运行保存 commit SHA、dirty 标志、数据集哈希、Prompt 哈希、随机种子、Python/关键依赖版本、生成参数和完整配置；embedding cache key 还包含 provider/endpoint identity。document、chunk、case 和 retrieval config 都有稳定 ID，报告规范化序列化并计算 SHA-256。对于 live 模型，我会明确“输入可复现”不等于“输出逐字确定”。
 
-`LLMClient.chat` 里指数退避（1s→2s→4s）：
-- 429 限流 / 5xx 服务端错误 / 网络抖动 → 重试
-- 4xx（除 429，如 400 参数错、401 鉴权失败）→ 不重试直接抛（重试无意义）
-- 重试耗尽 → 抛 RuntimeError
+## Q8：为什么用 SQLite，如何处理并发锁？
 
-## Q7：RAG 是怎么实现的？
+本地实验库的写入规模小，SQLite 易检查、易携带。线程池只做 provider/指标工作，所有 Future 回到主线程后再写同一连接；同时开启 WAL、foreign keys 和 5 秒 busy timeout，降低报告读取与跑批的锁冲突。多机多 writer 才有迁移 PostgreSQL 的必要。
 
-LangChain 的 `VectorStoreIndexCreator` 一站式：加载文档 → `RecursiveCharacterTextSplitter` 切片 → `OpenAIEmbeddings` 向量化 → 存进 ChromaDB。查询时用 retriever 取 top_k 片段，拼进 Prompt 让 LLM 结合上下文回答。
+## Q9：预算 20 元如何保证不超？
 
-## Q8：并发是怎么做的？为什么用线程池而不是异步？
+不是先假设 20 元够，而是读取带核验日期和官方 URL 的价格 YAML。请求发送前会截断序列化输入并设置 `max_tokens`；预检把主调用、一次结构修复和 `max_retries + 1` 次尝试全部计入 cache-miss 最坏成本，再乘 1.25 安全系数。完整矩阵缓冲成本超过 90% 阈值时零请求退出，运行中则先预留、后按 usage 结算。
 
-`ThreadPoolExecutor`，默认 4 并发。模型调用是 IO 密集（等 API 响应），线程池在 Python 里足够释放 GIL 的等待时间。异步（asyncio）要改造整个调用链，对这个规模的评测收益不大、复杂度高。
+## Q10：Provider 错误与密钥如何处理？
 
-## Q9：用 AI 编程助手（Copilot/Cursor）做了什么？
+Key 只按配置的环境变量名读取，不写入配置。401/403 不重试；429、5xx 和网络错误做有界指数退避；错误文本会替换 Key 和 Bearer token，并限制持久化长度。检索、生成、指标和 Judge 异常按阶段落成失败 case，其他题继续；已知 usage 按实结算，已尝试但 usage 不可得的阶段按预留上限保守记账。结构化解析只允许一次 JSON 修复。
 
-- 生成 Prompt 模板和测试用例的脚手架
-- 重构 Evaluator 的并发逻辑
-- 写 Jinja2 报告模板的 CSS
+## Q11：LLM-as-Judge 如何减少偏差？
 
-核心逻辑自己设计，AI 负责重复性代码和样板，效率提升明显。
+Judge 输出必须满足 1–5 分 schema，`passed` 与分数阈值强绑定。可执行的 pairwise 命令用 A/B 和 B/A 两种顺序各评一次，将 usage、成本、reason 与 position-sensitive 结果持久化；归一化不一致的样本不计入胜率。更关键的是，Judge 不能自证可靠：至少 12 条分层 opaque 盲标达到 within-one ≥ 0.80、MAE ≤ 1.0 后才允许参与阻断门禁。
 
-## Q10：项目还有什么不足 / 下一步？
+## Q12：现在有 Judge 与人工一致率吗？
 
-- 数据集只有 20 条、5 个类别，规模偏小，结论统计意义有限
-- LLM-as-Judge 没做多 Judge 投票，单 Judge 有偏差
-- 没做成本统计（每次策略对比花了多少 token / 钱）
-- RAG 还停留在单文档，没做多文档混合检索
+有，但是小样本、带限定。`docs/artifacts/final-evidence-summary-2026-08-21.json` 记录了 12 条分层盲标（含 1 条边界复核）：within-one rate 100%、灾难性分歧 0、MAE ≈ 0.33，校准 gate 通过。面试应说“在 n=12 协议下通过了更严的人工校准门禁”，不能说成“Judge 已在大规模上可靠”或省略样本规模。
+
+## Q13：为什么覆盖率只卡纯逻辑模块？
+
+领域、配置、指标、预算和比较逻辑适合穷举边界，当前聚焦 branch coverage 为 95.53%。Provider、CLI、SQLite 与模板边界用行为集成测试验证；全包 strict mypy 另行覆盖类型边界。为了全仓数字给每条网络路径堆 mock，不会增加真实可靠性。
+
+## Q14：如何避免 CI 回归 fixture 造假？
+
+Fixture 只保存真实配置、提交的 384-case baseline 报告路径和规则。CI 在临时目录完整重跑当前 48×8 pipeline，再按 `(case_id, config_id, model)` 比较；检索、runner、指标或 prompt 退化都会改变候选产物。它不是把一条手写 baseline/candidate 复制两遍，更不是读取 `passed: true`。
+
+## Q15：Mock 运行到底证明了什么、没证明什么？
+
+它证明 48 题 × 8 配置能完成切片、检索、结构化生成、指标、并发、SQLite、报告和回归闭环，而且不依赖网络。它不证明真实 LLM 的正确性、faithfulness、成本、延迟或 Judge 可靠性。README 和简历证据表把这两层明确分开。
+
+## Q16：如果继续做，优先级是什么？
+
+M2 主证据已具备（96-arm live + 12 条盲标校准）。下一步优先：① 在确认预算后，用已 instrument 的 HTTP 计数重跑 live，消掉历史 `http_request_count: null`；② 若要写 384-arm 付费结论，先跑 dated preflight 并显式确认；③ 需要对比句时用 `compare`/`pairwise` 产物，不手算。仪表盘、Docker 和多版本 CI 仍是展示增强，不能抢在新证据前面。

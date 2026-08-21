@@ -1,0 +1,18 @@
+{
+  "artifact_type": "independent_human_adjudication",
+  "experiment_id": "544dcc6e-b60d-4bd1-bde0-8c8bb89c3508",
+  "protocol": "reference-answer-v1",
+  "row": 1,
+  "sample_id": "30c338cda7b59a848c14c113",
+  "original_human_label": {
+    "score": 2,
+    "reason": "输出偏离参考核心含义，未提及重复边界文本使跨边界事实仍可检索，转而讨论上下文保留与 chunk 大小权衡。",
+    "status": "preserved_not_selected"
+  },
+  "independent_reviewer_label": {
+    "score": 3,
+    "reason": "模型输出提到了保留上下文、缓解小 chunk 的上下文丢失，方向正确，但没有点出通过重复边界文本使边缘事实完整出现在某个 chunk 中并可被检索的核心机制；相似度稀释也不是 overlap 的主要作用，因此只算部分正确。",
+    "reviewer_saw_judge_score": false,
+    "status": "selected_for_current_calibration"
+  }
+}

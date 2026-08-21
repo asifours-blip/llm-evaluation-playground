@@ -1,0 +1,42 @@
+{
+  "artifact_type": "judge_human_calibration",
+  "protocol": "reference-answer-v1",
+  "experiment_id": "d212f35b-3482-4e52-9490-338be5520511",
+  "supersedes": "docs/artifacts/calibrate-2026-08-21.json",
+  "label_count": 12,
+  "metrics": {
+    "within_one_rate": 0.9166666666666666,
+    "within_one_count": 11,
+    "catastrophic_disagreement_count": 1,
+    "mean_signed_difference_human_minus_judge": -0.16666666666666666,
+    "weighted_kappa_quadratic": 0.8484848484848484
+  },
+  "gates": {
+    "within_one_rate": {
+      "required": ">= 0.90 (11/12)",
+      "passed": true
+    },
+    "catastrophic_disagreement_count": {
+      "required": "0",
+      "passed": false
+    },
+    "mean_signed_difference": {
+      "required": "abs(value) <= 0.5",
+      "passed": true
+    },
+    "weighted_kappa": {
+      "required": "report only; review if < 0.2 and other gates fail",
+      "value": 0.8484848484848484
+    }
+  },
+  "gate": "fail",
+  "gate_reasons": [
+    "catastrophic disagreements: 1"
+  ],
+  "escalations": [
+    {
+      "row": 2,
+      "difference": -3
+    }
+  ]
+}

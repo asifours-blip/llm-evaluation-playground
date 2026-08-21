@@ -1,0 +1,28 @@
+name: offline-baseline
+mode: mock
+dataset_path: ../data/eval/rag_quality_v1.json
+knowledge_base_path: ../data/knowledge_base
+database_path: ../.ragql/experiments.sqlite3
+artifact_dir: ../artifacts/offline-baseline
+random_seed: 42
+max_workers: 4
+provider:
+  name: fake
+  base_url: https://offline.invalid/v1
+  api_key_env: OFFLINE_FAKE_API_KEY
+  chat_model: fake-chat
+  embedding_model: fake-hash-64
+retrieval:
+  - {chunk_size: 300, chunk_overlap: 50, top_k: 2, prompt_variant: direct}
+  - {chunk_size: 300, chunk_overlap: 50, top_k: 2, prompt_variant: evidence_first}
+  - {chunk_size: 300, chunk_overlap: 50, top_k: 4, prompt_variant: direct}
+  - {chunk_size: 300, chunk_overlap: 50, top_k: 4, prompt_variant: evidence_first}
+  - {chunk_size: 600, chunk_overlap: 50, top_k: 2, prompt_variant: direct}
+  - {chunk_size: 600, chunk_overlap: 50, top_k: 2, prompt_variant: evidence_first}
+  - {chunk_size: 600, chunk_overlap: 50, top_k: 4, prompt_variant: direct}
+  - {chunk_size: 600, chunk_overlap: 50, top_k: 4, prompt_variant: evidence_first}
+budget:
+  currency: CNY
+  hard_limit: 20
+  preflight_fraction: 0.90
+  safety_multiplier: 1.25
