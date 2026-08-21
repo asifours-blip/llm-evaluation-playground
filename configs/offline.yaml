@@ -1,9 +1,9 @@
 name: offline-baseline
 mode: mock
-dataset_path: data/eval/rag_quality_v1.json
-knowledge_base_path: data/knowledge_base
-database_path: .ragql/experiments.sqlite3
-artifact_dir: artifacts/offline-baseline
+dataset_path: ../data/eval/rag_quality_v1.json
+knowledge_base_path: ../data/knowledge_base
+database_path: ../.ragql/experiments.sqlite3
+artifact_dir: ../artifacts/offline-baseline
 random_seed: 42
 max_workers: 4
 provider:

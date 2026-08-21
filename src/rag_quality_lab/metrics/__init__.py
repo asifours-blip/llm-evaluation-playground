@@ -1,5 +1,6 @@
 """Pure evaluation metrics."""
 
+from rag_quality_lab.domain.models import PairwiseVerdict
 from rag_quality_lab.metrics.abstention import (
     AbstentionObservation,
     AbstentionSummary,
@@ -19,8 +20,8 @@ from rag_quality_lab.metrics.calibration import (
 )
 from rag_quality_lab.metrics.judge import (
     PairwiseResult,
-    PairwiseVerdict,
     parse_judge_verdict,
+    parse_pairwise_verdict,
     resolve_pairwise,
 )
 from rag_quality_lab.metrics.retrieval import (
@@ -43,6 +44,7 @@ __all__ = [
     "normalize_answer",
     "normalized_exact_match",
     "parse_judge_verdict",
+    "parse_pairwise_verdict",
     "recall_at_k",
     "reciprocal_rank",
     "resolve_pairwise",

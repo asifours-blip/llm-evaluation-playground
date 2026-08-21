@@ -19,6 +19,10 @@ from rag_quality_lab.experiments.compare import (
     compare_experiments,
     evaluate_regression,
 )
+from rag_quality_lab.experiments.pairwise import (
+    planned_pairwise_calls,
+    run_pairwise_comparison,
+)
 from rag_quality_lab.experiments.runner import ProviderBundle, run_experiment
 from rag_quality_lab.experiments.store import ExperimentStore
 
@@ -40,5 +44,7 @@ __all__ = [
     "estimate_tokens_upper_bound",
     "evaluate_regression",
     "preflight_budget",
+    "planned_pairwise_calls",
+    "run_pairwise_comparison",
     "run_experiment",
 ]

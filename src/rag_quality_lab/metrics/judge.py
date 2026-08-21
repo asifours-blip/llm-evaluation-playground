@@ -1,20 +1,14 @@
 """Structured scalar and order-controlled pairwise judge helpers."""
 
 import json
+from decimal import Decimal
 from typing import Literal
 
 from pydantic import BaseModel
 
-from rag_quality_lab.domain.models import JudgeVerdict
+from rag_quality_lab.domain.models import JudgeVerdict, PairwiseVerdict, TokenUsage
 
 Preference = Literal["A", "B", "tie"]
-
-
-class PairwiseVerdict(BaseModel):
-    """Preference expressed using positions in one presented order."""
-
-    preferred: Preference
-    reason: str
 
 
 class PairwiseResult(BaseModel):
@@ -26,10 +20,46 @@ class PairwiseResult(BaseModel):
     reversed_order: PairwiseVerdict
 
 
+class PairwiseCaseResult(BaseModel):
+    """Persisted two-order comparison for one case and model."""
+
+    case_id: str
+    model: str
+    status: Literal["completed", "failed"]
+    winner: Literal["baseline", "candidate", "tie"] | None = None
+    position_sensitive: bool = False
+    forward: PairwiseVerdict | None = None
+    reversed_order: PairwiseVerdict | None = None
+    forward_usage: TokenUsage | None = None
+    reversed_usage: TokenUsage | None = None
+    cost: Decimal = Decimal("0")
+    cost_estimated: bool = False
+    error: str | None = None
+
+
+class PairwiseComparisonRecord(BaseModel):
+    """Auditable result of comparing two configurations in both answer orders."""
+
+    id: str
+    baseline_experiment_id: str
+    candidate_experiment_id: str
+    baseline_config_id: str
+    candidate_config_id: str
+    judge_model: str
+    outcomes: list[PairwiseCaseResult]
+    summary: dict[str, float]
+
+
 def parse_judge_verdict(content: str) -> JudgeVerdict:
     """Parse scalar judge JSON through the score/pass invariant."""
 
     return JudgeVerdict.model_validate(json.loads(content))
+
+
+def parse_pairwise_verdict(content: str) -> PairwiseVerdict:
+    """Parse a pairwise JSON preference through the typed contract."""
+
+    return PairwiseVerdict.model_validate(json.loads(content))
 
 
 def build_scalar_judge_prompt(

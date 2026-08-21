@@ -1,12 +1,12 @@
 """Deterministic baseline comparisons and regression gates."""
 
-from collections import defaultdict
 from collections.abc import Sequence
+from pathlib import Path
 from typing import Self
 
 from pydantic import BaseModel, Field, model_validator
 
-from rag_quality_lab.domain.models import CaseResult, ExperimentRecord
+from rag_quality_lab.domain.models import CaseResult, ExperimentRecord, ExperimentStatus
 from rag_quality_lab.metrics.calibration import CalibrationResult
 
 CASE_HIGHER_IS_BETTER = {"answer_f1", "retrieval_recall_at_k"}
@@ -61,10 +61,10 @@ class RegressionConfig(BaseModel):
 
 
 class RegressionFixture(BaseModel):
-    """Portable baseline/candidate pair evaluated by the real regression gate."""
+    """Manifest for rerunning a real offline pipeline against committed evidence."""
 
-    baseline: ExperimentRecord
-    candidate: ExperimentRecord
+    config_path: Path
+    baseline_report_path: Path
     rules: list[RegressionRule]
 
 
@@ -73,6 +73,12 @@ def compare_experiments(
 ) -> ComparisonResult:
     """Compare common summary metrics and deterministic per-case outcomes."""
 
+    if baseline.status is not ExperimentStatus.COMPLETED or (
+        candidate.status is not ExperimentStatus.COMPLETED
+    ):
+        raise ValueError("comparisons require two completed experiments")
+    if baseline.identity.dataset_hash != candidate.identity.dataset_hash:
+        raise ValueError("comparisons require matching dataset hashes")
     common_metrics = sorted(set(baseline.summary) & set(candidate.summary))
     deltas = {
         metric: _metric_delta(baseline.summary[metric], candidate.summary[metric])
@@ -82,15 +88,18 @@ def compare_experiments(
     candidate_cases = _case_metric_means(candidate.case_results)
     regressed: list[str] = []
     improved: list[str] = []
-    for case_id in sorted(baseline_cases):
-        if case_id not in candidate_cases:
-            regressed.append(case_id)
+    for case_key in sorted(baseline_cases):
+        display_key = "::".join(case_key)
+        if case_key not in candidate_cases:
+            regressed.append(display_key)
             continue
-        direction = _case_direction(baseline_cases[case_id], candidate_cases[case_id])
+        direction = _case_direction(
+            baseline_cases[case_key], candidate_cases[case_key]
+        )
         if direction < 0:
-            regressed.append(case_id)
+            regressed.append(display_key)
         elif direction > 0:
-            improved.append(case_id)
+            improved.append(display_key)
     return ComparisonResult(
         baseline_id=baseline.id,
         candidate_id=candidate.id,
@@ -145,21 +154,21 @@ def _metric_delta(baseline: float, candidate: float) -> MetricDelta:
     )
 
 
-def _case_metric_means(results: Sequence[CaseResult]) -> dict[str, dict[str, float]]:
-    values: dict[str, dict[str, list[float]]] = defaultdict(lambda: defaultdict(list))
+def _case_metric_means(
+    results: Sequence[CaseResult],
+) -> dict[tuple[str, str, str], dict[str, float]]:
+    values: dict[tuple[str, str, str], dict[str, float]] = {}
     for result in results:
         if result.status != "completed":
             continue
+        key = (result.case_id, result.config_id, result.model)
+        if key in values:
+            raise ValueError(f"duplicate completed comparison key: {'::'.join(key)}")
+        values[key] = {}
         for metric in CASE_HIGHER_IS_BETTER | CASE_LOWER_IS_BETTER:
             if metric in result.metrics:
-                values[result.case_id][metric].append(result.metrics[metric])
-    return {
-        case_id: {
-            metric: sum(metric_values) / len(metric_values)
-            for metric, metric_values in metrics.items()
-        }
-        for case_id, metrics in values.items()
-    }
+                values[key][metric] = result.metrics[metric]
+    return values
 
 
 def _case_direction(baseline: dict[str, float], candidate: dict[str, float]) -> int:

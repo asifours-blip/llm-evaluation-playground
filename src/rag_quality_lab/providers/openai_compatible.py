@@ -15,13 +15,25 @@ from pydantic import ValidationError
 
 from rag_quality_lab.domain.models import (
     JudgeVerdict,
+    PairwiseVerdict,
     ProviderResponse,
     StructuredAnswer,
     TokenUsage,
 )
-from rag_quality_lab.metrics.judge import build_scalar_judge_prompt, parse_judge_verdict
+from rag_quality_lab.metrics.judge import (
+    build_pairwise_judge_prompt,
+    build_scalar_judge_prompt,
+    parse_judge_verdict,
+    parse_pairwise_verdict,
+)
 
 MAX_ERROR_LENGTH = 500
+GENERATION_INPUT_TOKEN_CAP = 2500
+GENERATION_OUTPUT_TOKEN_CAP = 512
+JUDGE_INPUT_TOKEN_CAP = 3500
+JUDGE_OUTPUT_TOKEN_CAP = 256
+MESSAGE_PROTOCOL_TOKEN_ALLOWANCE = 128
+REPAIR_PROMPT_TOKEN_ALLOWANCE = 384
 
 
 class HTTPResponse(Protocol):
@@ -135,6 +147,7 @@ class OpenAICompatibleProvider:
         if max_retries < 0:
             raise ValueError("max_retries must be non-negative")
         self.base_url = base_url.rstrip("/")
+        self.cache_identity = f"openai-compatible:{self.base_url}"
         self.api_key = api_key
         self.timeout_seconds = timeout_seconds
         self.max_retries = max_retries
@@ -154,7 +167,13 @@ class OpenAICompatibleProvider:
         started_at = time.perf_counter()
         primary = self._chat_completion(
             model=model,
-            messages=self._answer_messages(question, contexts, instructions),
+            messages=self._bounded_messages(
+                self._answer_messages(question, contexts, instructions),
+                max_serialized_bytes=(
+                    GENERATION_INPUT_TOKEN_CAP - MESSAGE_PROTOCOL_TOKEN_ALLOWANCE
+                ),
+            ),
+            max_tokens=GENERATION_OUTPUT_TOKEN_CAP,
         )
         usage = self._token_usage(primary)
         content = self._message_content(primary)
@@ -164,7 +183,15 @@ class OpenAICompatibleProvider:
         except (json.JSONDecodeError, TypeError, ValidationError):
             repaired = self._chat_completion(
                 model=model,
-                messages=self._repair_messages(content),
+                messages=self._bounded_messages(
+                    self._repair_messages(content),
+                    max_serialized_bytes=(
+                        GENERATION_OUTPUT_TOKEN_CAP
+                        + REPAIR_PROMPT_TOKEN_ALLOWANCE
+                        - MESSAGE_PROTOCOL_TOKEN_ALLOWANCE
+                    ),
+                ),
+                max_tokens=GENERATION_OUTPUT_TOKEN_CAP,
             )
             usage = _combine_usage(usage, self._token_usage(repaired))
             final_payload = repaired
@@ -227,13 +254,19 @@ class OpenAICompatibleProvider:
         )
         primary = self._chat_completion(
             model=model,
-            messages=[
-                {
-                    "role": "system",
-                    "content": "Apply the supplied rubric. Return one JSON object only.",
-                },
-                {"role": "user", "content": prompt},
-            ],
+            messages=self._bounded_messages(
+                [
+                    {
+                        "role": "system",
+                        "content": "Apply the supplied rubric. Return one JSON object only.",
+                    },
+                    {"role": "user", "content": prompt},
+                ],
+                max_serialized_bytes=(
+                    JUDGE_INPUT_TOKEN_CAP - MESSAGE_PROTOCOL_TOKEN_ALLOWANCE
+                ),
+            ),
+            max_tokens=JUDGE_OUTPUT_TOKEN_CAP,
         )
         usage = self._token_usage(primary)
         final_payload = primary
@@ -242,7 +275,15 @@ class OpenAICompatibleProvider:
         except (json.JSONDecodeError, TypeError, ValidationError):
             repaired = self._chat_completion(
                 model=model,
-                messages=self._judge_repair_messages(self._message_content(primary)),
+                messages=self._bounded_messages(
+                    self._judge_repair_messages(self._message_content(primary)),
+                    max_serialized_bytes=(
+                        JUDGE_OUTPUT_TOKEN_CAP
+                        + REPAIR_PROMPT_TOKEN_ALLOWANCE
+                        - MESSAGE_PROTOCOL_TOKEN_ALLOWANCE
+                    ),
+                ),
+                max_tokens=JUDGE_OUTPUT_TOKEN_CAP,
             )
             usage = _combine_usage(usage, self._token_usage(repaired))
             final_payload = repaired
@@ -258,16 +299,144 @@ class OpenAICompatibleProvider:
             raw=final_payload,
         )
 
+    def pairwise(
+        self,
+        question: str,
+        reference_answer: str,
+        evidence: Sequence[str],
+        answer_a: str,
+        answer_b: str,
+        *,
+        model: str,
+    ) -> ProviderResponse[PairwiseVerdict]:
+        """Judge one presented A/B order with the same bounded-call contract."""
+
+        started_at = time.perf_counter()
+        prompt = build_pairwise_judge_prompt(
+            question=question,
+            reference_answer=reference_answer,
+            evidence=list(evidence),
+            answer_a=answer_a,
+            answer_b=answer_b,
+        )
+        primary = self._chat_completion(
+            model=model,
+            messages=self._bounded_messages(
+                [
+                    {
+                        "role": "system",
+                        "content": "Apply the pairwise rubric. Return one JSON object only.",
+                    },
+                    {"role": "user", "content": prompt},
+                ],
+                max_serialized_bytes=(
+                    JUDGE_INPUT_TOKEN_CAP - MESSAGE_PROTOCOL_TOKEN_ALLOWANCE
+                ),
+            ),
+            max_tokens=JUDGE_OUTPUT_TOKEN_CAP,
+        )
+        usage = self._token_usage(primary)
+        final_payload = primary
+        try:
+            parsed = parse_pairwise_verdict(self._message_content(primary))
+        except (json.JSONDecodeError, TypeError, ValidationError):
+            repaired = self._chat_completion(
+                model=model,
+                messages=self._bounded_messages(
+                    self._pairwise_repair_messages(self._message_content(primary)),
+                    max_serialized_bytes=(
+                        JUDGE_OUTPUT_TOKEN_CAP
+                        + REPAIR_PROMPT_TOKEN_ALLOWANCE
+                        - MESSAGE_PROTOCOL_TOKEN_ALLOWANCE
+                    ),
+                ),
+                max_tokens=JUDGE_OUTPUT_TOKEN_CAP,
+            )
+            usage = _combine_usage(usage, self._token_usage(repaired))
+            final_payload = repaired
+            try:
+                parsed = parse_pairwise_verdict(self._message_content(repaired))
+            except (json.JSONDecodeError, TypeError, ValidationError) as error:
+                self._raise_sanitized(f"pairwise judge validation failed: {error}")
+        return ProviderResponse[PairwiseVerdict](
+            parsed=parsed,
+            usage=usage,
+            model=model,
+            latency_ms=(time.perf_counter() - started_at) * 1000,
+            raw=final_payload,
+        )
+
     def _chat_completion(
-        self, *, model: str, messages: list[dict[str, str]]
+        self,
+        *,
+        model: str,
+        messages: list[dict[str, str]],
+        max_tokens: int,
     ) -> dict[str, Any]:
-        body: dict[str, Any] = {
-            "model": model,
-            "messages": messages,
-            "response_format": {"type": "json_object"},
-        }
-        body.update(self.extra_body)
+        body: dict[str, Any] = dict(self.extra_body)
+        body.update(
+            {
+                "model": model,
+                "messages": messages,
+                "max_tokens": max_tokens,
+                "response_format": {"type": "json_object"},
+            }
+        )
         return self._post_json("/chat/completions", body)
+
+    @staticmethod
+    def _bounded_messages(
+        messages: list[dict[str, str]], *, max_serialized_bytes: int
+    ) -> list[dict[str, str]]:
+        """Middle-truncate the last user message under a byte token bound."""
+
+        bounded = [dict(message) for message in messages]
+
+        def serialized_size() -> int:
+            return len(
+                json.dumps(
+                    bounded,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            )
+
+        if serialized_size() <= max_serialized_bytes:
+            return bounded
+        user_index = next(
+            (
+                index
+                for index in range(len(bounded) - 1, -1, -1)
+                if bounded[index].get("role") == "user"
+            ),
+            None,
+        )
+        if user_index is None:
+            raise ValueError("bounded messages require a user message")
+        original = bounded[user_index]["content"]
+        marker = "\n...[TRUNCATED TO INPUT CAP]...\n"
+
+        def truncated_content(length: int) -> str:
+            if length >= len(original):
+                return original
+            prefix_length = (length * 3) // 5
+            suffix_length = length - prefix_length
+            suffix = original[-suffix_length:] if suffix_length else ""
+            return original[:prefix_length] + marker + suffix
+
+        low = 0
+        high = len(original)
+        while low < high:
+            midpoint = (low + high + 1) // 2
+            bounded[user_index]["content"] = truncated_content(midpoint)
+            if serialized_size() <= max_serialized_bytes:
+                low = midpoint
+            else:
+                high = midpoint - 1
+        bounded[user_index]["content"] = truncated_content(low)
+        if serialized_size() > max_serialized_bytes:
+            raise ValueError("input cap is too small for the fixed prompt")
+        return bounded
 
     def _post_json(self, path: str, body: dict[str, Any]) -> dict[str, Any]:
         headers = {
@@ -308,7 +477,10 @@ class OpenAICompatibleProvider:
                     self._response_error(response),
                     status_code=response.status_code,
                 )
-            payload = response.json()
+            try:
+                payload = response.json()
+            except (TypeError, ValueError) as error:
+                self._raise_sanitized(f"provider response is not valid JSON: {error}")
             if not isinstance(payload, dict):
                 self._raise_sanitized("provider response must be a JSON object")
             return payload
@@ -393,6 +565,22 @@ class OpenAICompatibleProvider:
                 "content": (
                     "Required keys: score (integer 1-5), passed (boolean equal to "
                     f"score >= 4), reason (string). Content:\n{content}"
+                ),
+            },
+        ]
+
+    @staticmethod
+    def _pairwise_repair_messages(content: str) -> list[dict[str, str]]:
+        return [
+            {
+                "role": "system",
+                "content": "Repair the content into valid JSON only; do not reconsider it.",
+            },
+            {
+                "role": "user",
+                "content": (
+                    "Required keys: preferred (A, B, or tie), reason (non-empty "
+                    f"string). Content:\n{content}"
                 ),
             },
         ]

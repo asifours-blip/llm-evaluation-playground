@@ -27,6 +27,7 @@ from rag_quality_lab.providers.fake import (
     FakeEmbeddingProvider,
     FakeJudgeProvider,
 )
+from rag_quality_lab.providers.openai_compatible import ProviderError
 
 
 class HighUsageChatProvider:
@@ -44,9 +45,31 @@ class HighUsageChatProvider:
         del contexts, instructions
         return ProviderResponse[StructuredAnswer](
             parsed=self.answers[question],
-            usage=TokenUsage(input_tokens=5000, output_tokens=1024),
+            usage=TokenUsage(input_tokens=7000, output_tokens=2048),
             model=model,
             latency_ms=1,
+        )
+
+
+class PartiallyFailingChatProvider:
+    def __init__(self, answers: dict[str, StructuredAnswer]) -> None:
+        self.answers = answers
+
+    def answer(
+        self,
+        question: str,
+        contexts: Sequence[str],
+        *,
+        model: str,
+        instructions: str | None = None,
+    ) -> ProviderResponse[StructuredAnswer]:
+        del contexts, instructions
+        if "weather" in question:
+            raise ProviderError("simulated provider failure")
+        return ProviderResponse[StructuredAnswer](
+            parsed=self.answers[question],
+            usage=TokenUsage(input_tokens=20, output_tokens=10),
+            model=model,
         )
 
 
@@ -179,7 +202,7 @@ def test_runner_persists_judge_score_usage_and_summary(tmp_path: Path) -> None:
     assert result.summary["judge_pass_rate"] == 0.5
 
 
-def test_runner_marks_budget_exceeded_without_losing_completed_cases(
+def test_runner_preflight_budget_exceeded_schedules_no_paid_cases(
     tmp_path: Path,
 ) -> None:
     config = experiment_config(tmp_path)
@@ -204,7 +227,7 @@ def test_runner_marks_budget_exceeded_without_losing_completed_cases(
     config = config.model_copy(
         update={
             "mode": "live",
-            "budget": BudgetConfig(hard_limit=9),
+            "budget": BudgetConfig(hard_limit=30),
             "pricing_path": pricing_path,
         }
     )
@@ -216,7 +239,29 @@ def test_runner_marks_budget_exceeded_without_losing_completed_cases(
     result = run_experiment(config, bundle, scripted_dataset())
 
     assert result.status is ExperimentStatus.BUDGET_EXCEEDED
-    assert 0 < len(result.case_results) < len(scripted_dataset().cases)
+    assert result.case_results == []
+    assert result.summary["total_cost"] == 0.0
+
+
+def test_runner_isolates_provider_failure_and_persists_the_failed_case(
+    tmp_path: Path,
+) -> None:
+    config = experiment_config(tmp_path)
+    bundle = ProviderBundle(
+        embedding=FakeEmbeddingProvider(dimensions=32),
+        chat=PartiallyFailingChatProvider(scripted_answers()),
+    )
+
+    result = run_experiment(config, bundle, scripted_dataset())
+
+    assert result.status is ExperimentStatus.COMPLETED
+    assert len(result.case_results) == 2
+    failed = next(case for case in result.case_results if case.status == "failed")
+    assert failed.case_id == "rag-002"
+    assert failed.failure_phase == "generation"
+    assert failed.error == "simulated provider failure"
+    assert result.summary["completed_cases"] == 1.0
+    assert result.summary["failure_count"] == 1.0
 
 
 def test_live_runner_preflights_and_settles_generation_and_judge_costs(

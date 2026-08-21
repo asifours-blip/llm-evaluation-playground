@@ -1,9 +1,14 @@
 import json
+import os
+import re
 import subprocess
 import sys
 from pathlib import Path
 
 import yaml
+
+from rag_quality_lab.experiments.store import ExperimentStore
+from rag_quality_lab.metrics.calibration import AnnotationSnapshot, HumanAnnotation
 
 
 def write_cli_fixture(
@@ -124,15 +129,44 @@ def test_live_preflight_includes_generation_and_judge_calls(tmp_path: Path) -> N
 
     assert result.returncode == 0, result.stderr
     payload = json.loads(result.stdout)
-    assert payload["unbuffered_cost"] == "0.006036"
-    assert payload["buffered_cost"] == "0.00754500"
-    assert payload["total_request_count"] == 2
+    assert payload["unbuffered_cost"] == "0.031824"
+    assert payload["buffered_cost"] == "0.03978000"
+    assert payload["total_request_count"] == 12
     assert [call["output_token_cap"] for call in payload["planned_calls"]] == [
-        512,
-        256,
+        3072,
+        1536,
     ]
+    assert [call["requests_per_case"] for call in payload["planned_calls"]] == [6, 6]
     assert payload["pricing_verified_at"] == "2026-08-21"
     assert payload["pricing_source_url"] == "https://example.com/pricing"
+
+
+def test_confirmed_live_run_without_key_fails_without_traceback(
+    tmp_path: Path,
+) -> None:
+    config = write_cli_fixture(tmp_path, mode="live")
+    environment = os.environ.copy()
+    environment.pop("FAKE_API_KEY", None)
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "rag_quality_lab.cli",
+            "run",
+            "--config",
+            str(config),
+            "--confirm-live-run",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
+
+    assert result.returncode == 2
+    assert "missing API key environment variable: FAKE_API_KEY" in result.stderr
+    assert "Traceback" not in result.stderr
 
 
 def test_legacy_mock_entry_delegates_to_new_cli(tmp_path: Path) -> None:
@@ -176,8 +210,11 @@ def test_judged_run_exports_blind_annotations_and_calibrates(tmp_path: Path) -> 
 
     assert export_result.returncode == 0, export_result.stderr
     blind = json.loads(annotations.read_text(encoding="utf-8"))
-    assert blind["case_id"].startswith("rag-001::chunk")
+    assert re.fullmatch(r"[0-9a-f]{24}", blind["sample_id"])
+    assert "rag-001" not in blind["sample_id"]
+    assert "chunk" not in blind["sample_id"]
     assert {"model", "config_id", "judge_score"}.isdisjoint(blind)
+    assert re.fullmatch(r"[0-9a-f]{64}", blind["content_hash"])
     assert "ID: doc-01" in " ".join(blind["evidence"])
 
     blind["human_score"] = 5
@@ -221,3 +258,90 @@ def test_judged_run_exports_blind_annotations_and_calibrates(tmp_path: Path) -> 
     )
 
     assert stored_report["judge_calibration"]["label_count"] == 1
+
+
+def test_pairwise_cli_executes_both_orders_and_persists_report(tmp_path: Path) -> None:
+    config = write_cli_fixture(tmp_path, with_judge=True)
+    run_result = run_cli("run", "--config", str(config))
+    experiment_id = json.loads(run_result.stdout)["experiment_id"]
+    config_id = "chunk200-overlap20-top1-direct"
+
+    result = run_cli(
+        "pairwise",
+        "--config",
+        str(config),
+        "--database",
+        str(tmp_path / "runs.sqlite3"),
+        "--baseline",
+        experiment_id,
+        "--candidate",
+        experiment_id,
+        "--baseline-config",
+        config_id,
+        "--candidate-config",
+        config_id,
+        "--output",
+        str(tmp_path / "pairwise"),
+    )
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    report = json.loads(Path(payload["report_json"]).read_text(encoding="utf-8"))
+    assert report["summary"]["completed_count"] == 1.0
+    assert report["summary"]["tie_rate"] == 1.0
+    assert report["outcomes"][0]["forward"] is not None
+    assert report["outcomes"][0]["reversed_order"] is not None
+
+
+def test_database_regression_uses_stored_eligible_judge_calibration(
+    tmp_path: Path,
+) -> None:
+    config = write_cli_fixture(tmp_path, with_judge=True)
+    run_result = run_cli("run", "--config", str(config))
+    experiment_id = json.loads(run_result.stdout)["experiment_id"]
+    snapshots = [
+        AnnotationSnapshot(
+            sample_id=f"sample-{index}",
+            source_case_id="rag-001",
+            config_id="chunk200-overlap20-top1-direct",
+            model="fake-model",
+            judge_score=5,
+            content_hash=f"{index:064x}",
+        )
+        for index in range(12)
+    ]
+    annotations = [
+        HumanAnnotation(
+            sample_id=snapshot.sample_id,
+            human_score=5,
+            content_hash=snapshot.content_hash,
+        )
+        for snapshot in snapshots
+    ]
+    with ExperimentStore(tmp_path / "runs.sqlite3") as store:
+        store.record_annotation_snapshots(experiment_id, snapshots)
+        store.record_human_annotations(experiment_id, annotations)
+    rules = tmp_path / "judge-rules.yaml"
+    rules.write_text(
+        yaml.safe_dump(
+            {"rules": [{"metric": "judge_mean_score", "minimum_delta": 0.1}]}
+        ),
+        encoding="utf-8",
+    )
+
+    result = run_cli(
+        "regression",
+        "--database",
+        str(tmp_path / "runs.sqlite3"),
+        "--baseline",
+        experiment_id,
+        "--candidate",
+        experiment_id,
+        "--rules",
+        str(rules),
+    )
+
+    assert result.returncode == 1, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["failed_metrics"] == ["judge_mean_score"]
+    assert payload["skipped_metrics"] == []

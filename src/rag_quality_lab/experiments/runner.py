@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.metadata
 import json
 import platform
 import subprocess
@@ -10,8 +11,9 @@ from collections.abc import Iterator, Sequence
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from decimal import Decimal
+from typing import Literal
 
-from rag_quality_lab.config.loaders import load_yaml_model
+from rag_quality_lab.config.loaders import load_yaml_model, validate_dataset_corpus
 from rag_quality_lab.domain.models import (
     Answerability,
     CaseResult,
@@ -23,7 +25,10 @@ from rag_quality_lab.domain.models import (
     ExperimentRecord,
     ExperimentStatus,
     PricingConfig,
+    ProviderResponse,
     RetrievalConfig,
+    RetrievalHit,
+    StructuredAnswer,
     TokenUsage,
 )
 from rag_quality_lab.experiments.budget import (
@@ -36,6 +41,7 @@ from rag_quality_lab.experiments.budget import (
 from rag_quality_lab.experiments.store import ExperimentStore
 from rag_quality_lab.metrics.abstention import (
     AbstentionObservation,
+    is_effective_abstention,
     summarize_abstention,
 )
 from rag_quality_lab.metrics.answer import (
@@ -50,12 +56,17 @@ from rag_quality_lab.metrics.retrieval import (
 )
 from rag_quality_lab.prompts.engine import PromptEngine
 from rag_quality_lab.providers.base import ChatProvider, EmbeddingProvider, JudgeProvider
+from rag_quality_lab.providers.openai_compatible import (
+    GENERATION_INPUT_TOKEN_CAP,
+    GENERATION_OUTPUT_TOKEN_CAP,
+    JUDGE_INPUT_TOKEN_CAP,
+    JUDGE_OUTPUT_TOKEN_CAP,
+    REPAIR_PROMPT_TOKEN_ALLOWANCE,
+    ProviderError,
+)
 from rag_quality_lab.retrieval.index import InMemoryIndex, chunk_document, load_documents
 
-GENERATION_INPUT_CAP = 2500
-GENERATION_OUTPUT_CAP = 512
-JUDGE_INPUT_CAP = 2000
-JUDGE_OUTPUT_CAP = 256
+FailurePhase = Literal["retrieval", "generation", "metrics", "judge"]
 
 
 @dataclass(frozen=True)
@@ -81,6 +92,24 @@ class _TaskOutput:
     result: CaseResult
 
 
+class _TaskFailure(RuntimeError):
+    """A case-local failure tagged with the pipeline phase that raised it."""
+
+    def __init__(
+        self,
+        phase: FailurePhase,
+        cause: Exception,
+        *,
+        response: ProviderResponse[StructuredAnswer] | None = None,
+        hits: Sequence[RetrievalHit] = (),
+    ) -> None:
+        super().__init__(str(cause))
+        self.phase = phase
+        self.cause = cause
+        self.response = response
+        self.hits = list(hits)
+
+
 def run_experiment(
     config: ExperimentConfig,
     providers: ProviderBundle,
@@ -91,6 +120,7 @@ def run_experiment(
     if config.provider.judge_model is not None and providers.judge is None:
         raise ValueError("judge_model requires a judge provider")
     documents = load_documents(config.knowledge_base_path)
+    validate_dataset_corpus(dataset, documents)
     prompt_engine = PromptEngine()
     identity = _experiment_identity(config, dataset, prompt_engine)
     tasks = list(_tasks(config, dataset, documents, providers.embedding, prompt_engine))
@@ -192,9 +222,26 @@ def _coordinate_tasks(
                     pending[item][0].config_id,
                 ),
             ):
-                _, reservations = pending.pop(future)
-                output = future.result()
-                result = output.result
+                task, reservations = pending.pop(future)
+                try:
+                    output = future.result()
+                    result = output.result
+                except _TaskFailure as failure:
+                    actual_cost, estimated_cost = _reconcile_failed_reservations(
+                        failure,
+                        reservations,
+                        config,
+                        ledger,
+                    )
+                    result = _failed_case_result(
+                        task,
+                        config,
+                        failure,
+                        cost=actual_cost + estimated_cost,
+                        cost_estimated=bool(estimated_cost),
+                    )
+                    store.record_case_result(experiment_id, result)
+                    continue
                 if ledger is not None and pricing is not None:
                     call_usages = _result_call_usages(result, config)
                     try:
@@ -251,20 +298,33 @@ def _tasks(
 def _evaluate_task(
     task: _Task, config: ExperimentConfig, providers: ProviderBundle
 ) -> _TaskOutput:
-    hits = task.index.search(task.case.question, top_k=task.retrieval.top_k)
+    try:
+        hits = task.index.search(task.case.question, top_k=task.retrieval.top_k)
+    except Exception as error:
+        raise _TaskFailure("retrieval", error) from error
     contexts = [f"[{hit.chunk.id}]\n{hit.chunk.text}" for hit in hits]
-    response = providers.chat.answer(
-        task.case.question,
-        contexts,
-        model=config.provider.chat_model,
-        instructions=task.instructions,
-    )
-    answer_vectors = providers.embedding.embed(
-        [response.parsed.answer, task.case.reference_answer],
-        model=config.provider.embedding_model,
-    )
+    try:
+        response = providers.chat.answer(
+            task.case.question,
+            contexts,
+            model=config.provider.chat_model,
+            instructions=task.instructions,
+        )
+    except Exception as error:
+        raise _TaskFailure("generation", error, hits=hits) from error
+    try:
+        answer_vectors = providers.embedding.embed(
+            [response.parsed.answer, task.case.reference_answer],
+            model=config.provider.embedding_model,
+        )
+    except Exception as error:
+        raise _TaskFailure("metrics", error, response=response, hits=hits) from error
     expected_answerable = task.case.answerability is Answerability.ANSWERABLE
-    abstention_correct = response.parsed.abstained != expected_answerable
+    effective_abstention = is_effective_abstention(
+        abstained=response.parsed.abstained,
+        answer=response.parsed.answer,
+    )
+    abstention_correct = effective_abstention != expected_answerable
     metrics = {
         "retrieval_recall_at_k": recall_at_k(
             hits,
@@ -285,18 +345,21 @@ def _evaluate_task(
             answer_vectors[0], answer_vectors[1]
         ),
         "abstention_correct": float(abstention_correct),
-        "false_answer": float(not expected_answerable and not response.parsed.abstained),
-        "over_abstention": float(expected_answerable and response.parsed.abstained),
+        "false_answer": float(not expected_answerable and not effective_abstention),
+        "over_abstention": float(expected_answerable and effective_abstention),
     }
     judge_response = None
     if config.provider.judge_model is not None and providers.judge is not None:
-        judge_response = providers.judge.judge(
-            task.case.question,
-            task.case.reference_answer,
-            response.parsed.answer,
-            [hit.chunk.text for hit in hits],
-            model=config.provider.judge_model,
-        )
+        try:
+            judge_response = providers.judge.judge(
+                task.case.question,
+                task.case.reference_answer,
+                response.parsed.answer,
+                [hit.chunk.text for hit in hits],
+                model=config.provider.judge_model,
+            )
+        except Exception as error:
+            raise _TaskFailure("judge", error, response=response, hits=hits) from error
         metrics.update(
             {
                 "judge_score": float(judge_response.parsed.score),
@@ -309,6 +372,8 @@ def _evaluate_task(
         reference_answer=task.case.reference_answer,
         reference_evidence=task.case.reference_evidence,
         category=task.case.category,
+        answerability=task.case.answerability,
+        difficulty=task.case.difficulty,
         config_id=task.config_id,
         model=config.provider.chat_model,
         answer=response.parsed,
@@ -329,6 +394,80 @@ def _evaluate_task(
     return _TaskOutput(result=result)
 
 
+def _failed_case_result(
+    task: _Task,
+    config: ExperimentConfig,
+    failure: _TaskFailure,
+    *,
+    cost: Decimal,
+    cost_estimated: bool,
+) -> CaseResult:
+    cause = failure.cause
+    error = (
+        str(cause)
+        if isinstance(cause, ProviderError)
+        else f"{type(cause).__name__}: case execution failed"
+    )
+    return CaseResult(
+        case_id=task.case.id,
+        question=task.case.question,
+        reference_answer=task.case.reference_answer,
+        reference_evidence=task.case.reference_evidence,
+        category=task.case.category,
+        answerability=task.case.answerability,
+        difficulty=task.case.difficulty,
+        config_id=task.config_id,
+        model=config.provider.chat_model,
+        answer=failure.response.parsed if failure.response is not None else None,
+        retrieval_hits=failure.hits,
+        usage=failure.response.usage if failure.response is not None else None,
+        latency_ms=(
+            failure.response.latency_ms if failure.response is not None else 0
+        ),
+        cost=cost,
+        cost_estimated=cost_estimated,
+        status="failed",
+        failure_phase=failure.phase,
+        error=error,
+    )
+
+
+def _reconcile_failed_reservations(
+    failure: _TaskFailure,
+    reservations: list[Decimal],
+    config: ExperimentConfig,
+    ledger: BudgetLedger | None,
+) -> tuple[Decimal, Decimal]:
+    if ledger is None:
+        return Decimal("0"), Decimal("0")
+    generation = reservations[:1]
+    remaining = reservations[1:]
+    actual = Decimal("0")
+    estimated = Decimal("0")
+    if failure.phase == "retrieval":
+        ledger.release_reserved(reservations)
+    elif failure.phase == "generation":
+        estimated = ledger.charge_reserved(generation)
+        ledger.release_reserved(remaining)
+    elif failure.phase == "metrics":
+        if failure.response is None:
+            raise ValueError("metrics failure is missing generation usage")
+        actual = ledger.settle_many(
+            generation,
+            [(config.provider.chat_model, failure.response.usage)],
+        )
+        ledger.release_reserved(remaining)
+    else:
+        if failure.response is None:
+            raise ValueError("judge failure is missing generation usage")
+        actual = ledger.settle_many(
+            generation,
+            [(config.provider.chat_model, failure.response.usage)],
+        )
+        estimated = ledger.charge_reserved(remaining)
+    return actual, estimated
+
+
 def _summary(
     results: Sequence[CaseResult], dataset: EvaluationDataset
 ) -> dict[str, float]:
@@ -342,7 +481,7 @@ def _summary(
     summary: dict[str, float] = {
         "completed_cases": float(len(completed)),
         "failure_count": float(len(results) - len(completed)),
-        "total_cost": float(sum((result.cost for result in completed), Decimal("0"))),
+        "total_cost": float(sum((result.cost for result in results), Decimal("0"))),
         "mean_latency_ms": _mean([result.latency_ms for result in completed]),
         "p50_latency_ms": _percentile(
             [result.latency_ms for result in completed], 0.50
@@ -365,14 +504,20 @@ def _summary(
         "answer_semantic_similarity",
     ):
         summary[metric_name] = _mean(
-            [result.metrics[metric_name] for result in completed]
+            [result.metrics[metric_name] for result in answerable]
         )
     observations = [
         AbstentionObservation(
             expected_answerable=(
                 case_by_id[result.case_id].answerability is Answerability.ANSWERABLE
             ),
-            abstained=bool(result.answer and result.answer.abstained),
+            abstained=bool(
+                result.answer
+                and is_effective_abstention(
+                    abstained=result.answer.abstained,
+                    answer=result.answer.answer,
+                )
+            ),
         )
         for result in completed
     ]
@@ -401,21 +546,36 @@ def _summary(
 def planned_calls(config: ExperimentConfig, case_count: int) -> list[PlannedCall]:
     """Return every capped provider call included in one experiment plan."""
 
+    attempts = config.provider.max_retries + 1
     calls = [
         PlannedCall(
             model=config.provider.chat_model,
-            input_token_cap=GENERATION_INPUT_CAP,
-            output_token_cap=GENERATION_OUTPUT_CAP,
+            input_token_cap=(
+                GENERATION_INPUT_TOKEN_CAP
+                + GENERATION_OUTPUT_TOKEN_CAP
+                + REPAIR_PROMPT_TOKEN_ALLOWANCE
+            )
+            * attempts,
+            output_token_cap=GENERATION_OUTPUT_TOKEN_CAP * 2 * attempts,
             count=case_count,
+            phase="generation_with_repair",
+            requests_per_case=2 * attempts,
         )
     ]
     if config.provider.judge_model is not None:
         calls.append(
             PlannedCall(
                 model=config.provider.judge_model,
-                input_token_cap=JUDGE_INPUT_CAP,
-                output_token_cap=JUDGE_OUTPUT_CAP,
+                input_token_cap=(
+                    JUDGE_INPUT_TOKEN_CAP
+                    + JUDGE_OUTPUT_TOKEN_CAP
+                    + REPAIR_PROMPT_TOKEN_ALLOWANCE
+                )
+                * attempts,
+                output_token_cap=JUDGE_OUTPUT_TOKEN_CAP * 2 * attempts,
                 count=case_count,
+                phase="judge_with_repair",
+                requests_per_case=2 * attempts,
             )
         )
     return calls
@@ -456,6 +616,7 @@ def _experiment_identity(
         config=config.model_dump(mode="json"),
         random_seed=config.random_seed,
         python_version=platform.python_version(),
+        dependency_versions=_dependency_versions(),
     )
 
 
@@ -476,6 +637,16 @@ def _git_identity() -> tuple[str, bool]:
         return commit, bool(status.strip())
     except (OSError, subprocess.CalledProcessError):
         return "unknown", True
+
+
+def _dependency_versions() -> dict[str, str]:
+    versions: dict[str, str] = {}
+    for distribution in ("pydantic", "PyYAML", "requests", "Jinja2"):
+        try:
+            versions[distribution] = importlib.metadata.version(distribution)
+        except importlib.metadata.PackageNotFoundError:
+            versions[distribution] = "not-installed"
+    return versions
 
 
 def _model_hash(payload: object) -> str:

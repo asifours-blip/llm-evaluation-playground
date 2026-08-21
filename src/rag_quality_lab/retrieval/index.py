@@ -66,6 +66,9 @@ def load_documents(directory: str | Path) -> list[Document]:
                 source_path=str(path),
             )
         )
+    document_ids = [document.id for document in documents]
+    if len(document_ids) != len(set(document_ids)):
+        raise ValueError("knowledge base document IDs must be unique")
     return documents
 
 
@@ -114,7 +117,13 @@ class InMemoryIndex:
         chunking_hash = _hash_text(
             "\n".join(f"{chunk.id}\0{chunk.text}" for chunk in chunk_list)
         )
-        provider_id = f"{type(provider).__module__}.{type(provider).__qualname__}"
+        provider_id = str(
+            getattr(
+                provider,
+                "cache_identity",
+                f"{type(provider).__module__}.{type(provider).__qualname__}",
+            )
+        )
         keys = [
             _cache_key(provider_id, model, chunk, chunking_hash) for chunk in chunk_list
         ]

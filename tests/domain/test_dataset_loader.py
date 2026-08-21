@@ -32,7 +32,22 @@ def test_load_dataset_validates_json(tmp_path: Path) -> None:
 
 def test_load_dataset_accepts_utf8_bom(tmp_path: Path) -> None:
     path = tmp_path / "dataset.json"
-    payload = {"version": "1.0.0", "name": "empty", "cases": []}
+    payload = {
+        "version": "1.0.0",
+        "name": "minimal",
+        "cases": [
+            {
+                "id": "rag-001",
+                "question": "What does RAG retrieve?",
+                "reference_answer": "Evidence.",
+                "answerability": "answerable",
+                "expected_document_ids": ["doc-01"],
+                "reference_evidence": ["Evidence."],
+                "category": "retrieval",
+                "difficulty": "easy",
+            }
+        ],
+    }
     path.write_text(json.dumps(payload), encoding="utf-8-sig")
 
-    assert load_dataset(path).name == "empty"
+    assert load_dataset(path).name == "minimal"

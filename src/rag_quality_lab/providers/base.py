@@ -3,7 +3,12 @@
 from collections.abc import Sequence
 from typing import Protocol, runtime_checkable
 
-from rag_quality_lab.domain.models import JudgeVerdict, ProviderResponse, StructuredAnswer
+from rag_quality_lab.domain.models import (
+    JudgeVerdict,
+    PairwiseVerdict,
+    ProviderResponse,
+    StructuredAnswer,
+)
 
 
 @runtime_checkable
@@ -45,3 +50,15 @@ class JudgeProvider(Protocol):
         model: str,
     ) -> ProviderResponse[JudgeVerdict]:
         """Return a structured scalar verdict and usage metadata."""
+
+    def pairwise(
+        self,
+        question: str,
+        reference_answer: str,
+        evidence: Sequence[str],
+        answer_a: str,
+        answer_b: str,
+        *,
+        model: str,
+    ) -> ProviderResponse[PairwiseVerdict]:
+        """Return one order-specific pairwise verdict and usage metadata."""

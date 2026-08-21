@@ -13,7 +13,7 @@ from rag_quality_lab.domain.models import (
     TokenUsage,
 )
 from rag_quality_lab.experiments.store import ExperimentStore
-from rag_quality_lab.metrics.calibration import HumanAnnotation
+from rag_quality_lab.metrics.calibration import AnnotationSnapshot, HumanAnnotation
 
 
 def example_identity() -> ExperimentIdentity:
@@ -70,6 +70,8 @@ def test_store_enables_wal_busy_timeout_and_schema(tmp_path: Path) -> None:
             "metric_results",
             "artifacts",
             "human_annotations",
+            "annotation_snapshots",
+            "pairwise_comparisons",
         } <= store.table_names()
 
 
@@ -134,14 +136,34 @@ def test_live_alias_artifacts_and_human_annotations_are_persisted(
             sha256="abc123",
             metadata={"badge": "pilot"},
         )
+        store.record_annotation_snapshots(
+            live_id,
+            [
+                AnnotationSnapshot(
+                    sample_id="sample-1",
+                    source_case_id="rag-001",
+                    config_id="config-a",
+                    model="model-a",
+                    judge_score=4,
+                    content_hash="a" * 64,
+                )
+            ],
+        )
         store.record_human_annotations(
             live_id,
-            [HumanAnnotation(case_id="rag-001", human_score=4)],
+            [
+                HumanAnnotation(
+                    sample_id="sample-1", human_score=4, content_hash="a" * 64
+                )
+            ],
         )
 
         assert store.get_human_annotations(live_id) == [
-            HumanAnnotation(case_id="rag-001", human_score=4)
+            HumanAnnotation(
+                sample_id="sample-1", human_score=4, content_hash="a" * 64
+            )
         ]
+        assert store.get_annotation_snapshots(live_id)[0].source_case_id == "rag-001"
         artifact = store.connection.execute(
             "SELECT kind, path, sha256, metadata_json FROM artifacts"
         ).fetchone()

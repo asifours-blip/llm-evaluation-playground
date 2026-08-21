@@ -1,9 +1,9 @@
 name: deepseek-v4-flash-pilot
 mode: live
-dataset_path: data/eval/rag_quality_v1.json
-knowledge_base_path: data/knowledge_base
-database_path: .ragql/experiments.sqlite3
-artifact_dir: artifacts/live-deepseek-pilot
+dataset_path: ../data/eval/rag_quality_v1.json
+knowledge_base_path: ../data/knowledge_base
+database_path: ../.ragql/experiments.sqlite3
+artifact_dir: ../artifacts/live-deepseek-pilot
 pricing_path: pricing/deepseek-2026-08-21.yaml
 random_seed: 42
 max_workers: 2

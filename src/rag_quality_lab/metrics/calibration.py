@@ -1,5 +1,7 @@
 """Blind human annotation files and judge-agreement calibration."""
 
+import hashlib
+import json
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -27,7 +29,7 @@ class CalibrationResult(BaseModel):
 class JudgeSample(BaseModel):
     """Complete scored sample before identity fields are blinded."""
 
-    case_id: str
+    sample_id: str
     question: str
     reference_answer: str
     candidate_answer: str
@@ -40,19 +42,32 @@ class JudgeSample(BaseModel):
 class BlindAnnotation(BaseModel):
     """Sample shown to a human without model, config, or judge identity."""
 
-    case_id: str
+    sample_id: str
     question: str
     reference_answer: str
     candidate_answer: str
     evidence: list[str]
+    content_hash: str = Field(min_length=64, max_length=64)
     human_score: int | None = Field(default=None, ge=1, le=5)
 
 
 class HumanAnnotation(BaseModel):
     """Imported human score keyed by stable case ID."""
 
-    case_id: str
+    sample_id: str
     human_score: int = Field(ge=1, le=5)
+    content_hash: str = Field(min_length=64, max_length=64)
+
+
+class AnnotationSnapshot(BaseModel):
+    """Private mapping from one opaque sample to its scored source."""
+
+    sample_id: str
+    source_case_id: str
+    config_id: str
+    model: str
+    judge_score: int = Field(ge=1, le=5)
+    content_hash: str = Field(min_length=64, max_length=64)
 
 
 def calibrate(pairs: Sequence[HumanJudgePair]) -> CalibrationResult:
@@ -92,39 +107,83 @@ def calibrate(pairs: Sequence[HumanJudgePair]) -> CalibrationResult:
 
 def export_blind_annotations(
     samples: Sequence[JudgeSample], path: str | Path
-) -> None:
+) -> list[BlindAnnotation]:
     """Write JSONL with judge and system identity fields physically removed."""
 
     output_path = Path(path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    lines = [
+    annotations = [
         BlindAnnotation(
-            case_id=sample.case_id,
+            sample_id=sample.sample_id,
             question=sample.question,
             reference_answer=sample.reference_answer,
             candidate_answer=sample.candidate_answer,
             evidence=sample.evidence,
+            content_hash=_content_hash(
+                sample_id=sample.sample_id,
+                question=sample.question,
+                reference_answer=sample.reference_answer,
+                candidate_answer=sample.candidate_answer,
+                evidence=sample.evidence,
+            ),
         ).model_dump_json()
         for sample in samples
     ]
-    output_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    output_path.write_text("\n".join(annotations) + "\n", encoding="utf-8")
+    return [BlindAnnotation.model_validate_json(line) for line in annotations]
 
 
 def import_human_annotations(path: str | Path) -> list[HumanAnnotation]:
     """Validate completed blind JSONL and reject missing or duplicate labels."""
 
     annotations: list[HumanAnnotation] = []
-    seen_case_ids: set[str] = set()
+    seen_sample_ids: set[str] = set()
     for line in Path(path).read_text(encoding="utf-8-sig").splitlines():
         if not line.strip():
             continue
         blind = BlindAnnotation.model_validate_json(line)
         if blind.human_score is None:
-            raise ValueError(f"human_score is required for case {blind.case_id}")
-        if blind.case_id in seen_case_ids:
-            raise ValueError(f"duplicate human annotation: {blind.case_id}")
-        seen_case_ids.add(blind.case_id)
+            raise ValueError(f"human_score is required for sample {blind.sample_id}")
+        expected_hash = _content_hash(
+            sample_id=blind.sample_id,
+            question=blind.question,
+            reference_answer=blind.reference_answer,
+            candidate_answer=blind.candidate_answer,
+            evidence=blind.evidence,
+        )
+        if blind.content_hash != expected_hash:
+            raise ValueError(f"content hash mismatch for sample {blind.sample_id}")
+        if blind.sample_id in seen_sample_ids:
+            raise ValueError(f"duplicate human annotation: {blind.sample_id}")
+        seen_sample_ids.add(blind.sample_id)
         annotations.append(
-            HumanAnnotation(case_id=blind.case_id, human_score=blind.human_score)
+            HumanAnnotation(
+                sample_id=blind.sample_id,
+                human_score=blind.human_score,
+                content_hash=blind.content_hash,
+            )
         )
     return annotations
+
+
+def _content_hash(
+    *,
+    sample_id: str,
+    question: str,
+    reference_answer: str,
+    candidate_answer: str,
+    evidence: list[str],
+) -> str:
+    canonical = json.dumps(
+        {
+            "candidate_answer": candidate_answer,
+            "evidence": evidence,
+            "question": question,
+            "reference_answer": reference_answer,
+            "sample_id": sample_id,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()

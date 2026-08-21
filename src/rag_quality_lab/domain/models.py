@@ -11,6 +11,35 @@ from typing import Any, Generic, Literal, Self, TypeVar
 from pydantic import AnyHttpUrl, BaseModel, Field, model_validator
 
 Difficulty = Literal["easy", "medium", "hard"]
+CaseCategory = Literal[
+    "abstention",
+    "abstention_cost",
+    "chunking",
+    "chunking_embeddings",
+    "cost",
+    "deployment",
+    "deployment_pipeline",
+    "embeddings",
+    "embeddings_retrieval",
+    "evaluation",
+    "evaluation_abstention",
+    "failures",
+    "failures_deployment",
+    "ingestion",
+    "ingestion_chunking",
+    "latency",
+    "latency_failures",
+    "out_of_scope",
+    "pipeline",
+    "prompting",
+    "prompting_evaluation",
+    "rag_overview",
+    "reranking",
+    "reranking_prompting",
+    "retrieval",
+    "retrieval_reranking",
+    "unsupported_detail",
+]
 ResponseT = TypeVar("ResponseT")
 
 
@@ -24,18 +53,22 @@ class Answerability(StrEnum):
 class EvaluationCase(BaseModel):
     """One question with stable document-level ground truth."""
 
-    id: str
-    question: str
-    reference_answer: str
+    id: str = Field(min_length=1)
+    question: str = Field(min_length=1)
+    reference_answer: str = Field(min_length=1)
     answerability: Answerability
     expected_document_ids: list[str] = Field(default_factory=list)
     reference_evidence: list[str] = Field(default_factory=list)
-    category: str
+    category: CaseCategory
     difficulty: Difficulty
     tags: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def validate_answerability(self) -> Self:
+        if any(not value.strip() for value in self.expected_document_ids):
+            raise ValueError("expected document IDs must be non-empty")
+        if any(not value.strip() for value in self.reference_evidence):
+            raise ValueError("reference evidence must be non-empty")
         has_documents = bool(self.expected_document_ids)
         has_evidence = bool(self.reference_evidence)
         if self.answerability is Answerability.ANSWERABLE and not (
@@ -57,7 +90,7 @@ class EvaluationCase(BaseModel):
         reference_answer: str,
         expected_document_ids: list[str],
         reference_evidence: list[str],
-        category: str,
+        category: CaseCategory,
         difficulty: Difficulty,
         tags: list[str] | None = None,
     ) -> EvaluationCase:
@@ -80,7 +113,7 @@ class EvaluationCase(BaseModel):
         id: str,
         question: str,
         reference_answer: str,
-        category: str,
+        category: CaseCategory,
         difficulty: Difficulty,
         tags: list[str] | None = None,
     ) -> EvaluationCase:
@@ -98,10 +131,10 @@ class EvaluationCase(BaseModel):
 class EvaluationDataset(BaseModel):
     """A versioned collection of evaluation cases."""
 
-    version: str
-    name: str
+    version: str = Field(min_length=1)
+    name: str = Field(min_length=1)
     description: str = ""
-    cases: list[EvaluationCase]
+    cases: list[EvaluationCase] = Field(min_length=1)
 
     @model_validator(mode="after")
     def validate_unique_case_ids(self) -> Self:
@@ -122,6 +155,8 @@ class ProviderConfig(BaseModel):
     judge_model: str | None = None
     timeout_seconds: float = Field(default=60, gt=0)
     max_retries: int = Field(default=2, ge=0, le=5)
+    temperature: float = Field(default=0.0, ge=0, le=2)
+    top_p: float = Field(default=1.0, gt=0, le=1)
 
 
 class RetrievalConfig(BaseModel):
@@ -233,13 +268,20 @@ class JudgeVerdict(BaseModel):
 
     score: int = Field(ge=1, le=5)
     passed: bool
-    reason: str
+    reason: str = Field(min_length=1)
 
     @model_validator(mode="after")
     def validate_pass_threshold(self) -> Self:
         if self.passed != (self.score >= 4):
             raise ValueError("passed must be true exactly when score is 4 or 5")
         return self
+
+
+class PairwiseVerdict(BaseModel):
+    """Order-specific pairwise preference returned by a model judge."""
+
+    preferred: Literal["A", "B", "tie"]
+    reason: str = Field(min_length=1)
 
 
 class ProviderResponse(BaseModel, Generic[ResponseT]):
@@ -299,6 +341,7 @@ class ExperimentIdentity(BaseModel):
     config: dict[str, Any]
     random_seed: int
     python_version: str
+    dependency_versions: dict[str, str] = Field(default_factory=dict)
 
 
 class CaseResult(BaseModel):
@@ -309,6 +352,8 @@ class CaseResult(BaseModel):
     reference_answer: str = ""
     reference_evidence: list[str] = Field(default_factory=list)
     category: str = ""
+    answerability: Answerability | None = None
+    difficulty: Difficulty | None = None
     config_id: str
     model: str
     answer: StructuredAnswer | None = None
@@ -320,7 +365,9 @@ class CaseResult(BaseModel):
     judge_usage: TokenUsage | None = None
     latency_ms: float = Field(default=0, ge=0)
     cost: Decimal = Field(default=Decimal("0"), ge=0)
+    cost_estimated: bool = False
     status: Literal["completed", "failed", "skipped"]
+    failure_phase: Literal["retrieval", "generation", "metrics", "judge"] | None = None
     error: str | None = None
 
     @model_validator(mode="after")

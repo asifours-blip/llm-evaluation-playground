@@ -1,3 +1,4 @@
+import json
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -120,7 +121,11 @@ def test_answer_parses_usage_and_provider_specific_extra_body(
     )
     provider = make_provider(
         session=session,
-        extra_body={"thinking": {"type": "disabled"}},
+        extra_body={
+            "thinking": {"type": "disabled"},
+            "temperature": 0,
+            "top_p": 1,
+        },
     )
 
     response = provider.answer("q", ["context"], model="m")
@@ -131,6 +136,26 @@ def test_answer_parses_usage_and_provider_specific_extra_body(
     request_json = session.calls[0]["json"]
     assert request_json["response_format"] == {"type": "json_object"}
     assert request_json["thinking"] == {"type": "disabled"}
+    assert request_json["temperature"] == 0
+    assert request_json["top_p"] == 1
+    assert request_json["max_tokens"] == 512
+
+
+def test_answer_bounds_serialized_input_before_sending(
+    make_provider: Callable[..., OpenAICompatibleProvider],
+) -> None:
+    session = FakeSession(
+        [answer_response('{"answer":"A","citations":[],"abstained":false}')]
+    )
+    provider = make_provider(session=session)
+
+    provider.answer("q", ["x" * 20_000], model="m")
+
+    messages = session.calls[0]["json"]["messages"]
+    serialized_size = len(
+        json.dumps(messages, ensure_ascii=False, separators=(",", ":")).encode()
+    )
+    assert serialized_size <= 2372
 
 
 def test_malformed_answer_gets_one_repair_attempt(
@@ -170,7 +195,30 @@ def test_judge_returns_structured_verdict_and_usage(
     assert response.usage.total_tokens == 14
     request = session.calls[0]["json"]
     assert request["model"] == "judge-model"
+    assert request["max_tokens"] == 256
     assert "Score the candidate" in request["messages"][1]["content"]
+
+
+def test_pairwise_judge_returns_structured_preference(
+    make_provider: Callable[..., OpenAICompatibleProvider],
+) -> None:
+    session = FakeSession(
+        [answer_response('{"preferred":"A","reason":"more faithful"}')]
+    )
+    provider = make_provider(session=session)
+
+    response = provider.pairwise(
+        "q",
+        "reference",
+        ["evidence"],
+        "first",
+        "second",
+        model="judge-model",
+    )
+
+    assert response.parsed.preferred == "A"
+    assert response.usage.total_tokens == 14
+    assert "A:\nfirst" in session.calls[0]["json"]["messages"][1]["content"]
 
 
 def test_embeddings_preserve_response_order(

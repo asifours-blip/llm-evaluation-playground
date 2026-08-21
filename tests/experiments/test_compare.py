@@ -75,7 +75,7 @@ def test_comparison_reports_metric_and_case_deltas() -> None:
 
     assert comparison.metric_deltas["retrieval_recall_at_k"].absolute == -0.1
     assert comparison.metric_deltas["retrieval_recall_at_k"].percentage == -12.5
-    assert comparison.regressed_case_ids == ["rag-007"]
+    assert comparison.regressed_case_ids == ["rag-007::config::model"]
 
 
 def test_comparison_marks_percentage_unknown_for_zero_baseline() -> None:
@@ -146,8 +146,27 @@ def test_comparison_reports_improved_and_missing_candidate_cases() -> None:
         update={"case_results": []}
     )
 
-    assert compare_experiments(baseline, improved).improved_case_ids == ["rag-007"]
-    assert compare_experiments(baseline, missing).regressed_case_ids == ["rag-007"]
+    assert compare_experiments(baseline, improved).improved_case_ids == [
+        "rag-007::config::model"
+    ]
+    assert compare_experiments(baseline, missing).regressed_case_ids == [
+        "rag-007::config::model"
+    ]
+
+
+def test_comparison_rejects_incompatible_dataset_hash() -> None:
+    baseline = experiment("baseline", 0.8, 1.0)
+    candidate = experiment("candidate", 0.8, 1.0)
+    candidate = candidate.model_copy(
+        update={
+            "identity": candidate.identity.model_copy(
+                update={"dataset_hash": "different"}
+            )
+        }
+    )
+
+    with pytest.raises(ValueError, match="dataset"):
+        compare_experiments(baseline, candidate)
 
 
 def test_gate_fails_minimum_and_missing_metrics() -> None:

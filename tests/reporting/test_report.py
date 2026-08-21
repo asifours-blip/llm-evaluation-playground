@@ -3,6 +3,8 @@ import json
 from decimal import Decimal
 from pathlib import Path
 
+import pytest
+
 from rag_quality_lab.domain.models import (
     CaseResult,
     Chunk,
@@ -14,6 +16,7 @@ from rag_quality_lab.domain.models import (
     StructuredAnswer,
     TokenUsage,
 )
+from rag_quality_lab.metrics.calibration import CalibrationResult
 from rag_quality_lab.reporting.report import generate_reports
 
 
@@ -105,3 +108,36 @@ def test_live_report_defaults_to_pilot_not_final(tmp_path: Path) -> None:
     payload = json.loads(paths.json.read_text(encoding="utf-8"))
 
     assert payload["badge"] == "pilot"
+
+
+def test_mock_report_cannot_be_relabelled_as_final(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="live"):
+        generate_reports(example_experiment(), tmp_path, badge="final")
+
+
+def test_final_report_requires_eligible_human_calibration(tmp_path: Path) -> None:
+    live = example_experiment().model_copy(
+        update={
+            "identity": example_experiment().identity.model_copy(
+                update={"mode": "live"}
+            )
+        }
+    )
+
+    with pytest.raises(ValueError, match="calibration"):
+        generate_reports(live, tmp_path, badge="final")
+
+    paths = generate_reports(
+        live,
+        tmp_path,
+        badge="final",
+        calibration=CalibrationResult(
+            label_count=12,
+            exact_agreement=1,
+            within_one_rate=1,
+            mean_absolute_error=0,
+            blocking_eligible=True,
+            reason="agreement thresholds met",
+        ),
+    )
+    assert json.loads(paths.json.read_text(encoding="utf-8"))["badge"] == "final"

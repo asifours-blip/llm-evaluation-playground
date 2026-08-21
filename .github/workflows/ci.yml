@@ -27,14 +27,17 @@ jobs:
       - name: Lint
         run: ruff check .
 
-      - name: Type-check pure logic
+      - name: Type-check package
         run: >-
           mypy
           src/rag_quality_lab/domain
           src/rag_quality_lab/config
+          src/rag_quality_lab/retrieval
           src/rag_quality_lab/metrics
-          src/rag_quality_lab/experiments/budget.py
-          src/rag_quality_lab/experiments/compare.py
+          src/rag_quality_lab/providers
+          src/rag_quality_lab/experiments
+          src/rag_quality_lab/reporting
+          src/rag_quality_lab/cli.py
 
       - name: Test deterministic modules with focused coverage
         run: >-

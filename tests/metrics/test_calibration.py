@@ -54,7 +54,7 @@ def test_blind_annotation_export_removes_model_and_judge_fields(tmp_path: Path) 
     export_blind_annotations(
         [
             JudgeSample(
-                case_id="rag-001",
+                sample_id="8f0dbdb739676f484782f8d6",
                 question="Q",
                 reference_answer="R",
                 candidate_answer="A",
@@ -71,10 +71,13 @@ def test_blind_annotation_export_removes_model_and_judge_fields(tmp_path: Path) 
     assert "secret-model" not in exported
     assert "config-a" not in exported
     assert "judge_score" not in exported
+    assert '"sample_id":"8f0dbdb739676f484782f8d6"' in exported
+    assert '"content_hash":' in exported
 
     path.write_text(exported.replace("null", "4"), encoding="utf-8")
     annotations = import_human_annotations(path)
     assert annotations[0].human_score == 4
+    assert len(annotations[0].content_hash) == 64
 
 
 def test_human_annotation_import_rejects_missing_and_duplicate_scores(
@@ -84,7 +87,7 @@ def test_human_annotation_import_rejects_missing_and_duplicate_scores(
     export_blind_annotations(
         [
             JudgeSample(
-                case_id="rag-001",
+                sample_id="8f0dbdb739676f484782f8d6",
                 question="Q",
                 reference_answer="R",
                 candidate_answer="A",
@@ -103,4 +106,32 @@ def test_human_annotation_import_rejects_missing_and_duplicate_scores(
     completed = path.read_text(encoding="utf-8").replace("null", "4")
     path.write_text(f"\n{completed}{completed}", encoding="utf-8")
     with pytest.raises(ValueError, match="duplicate"):
+        import_human_annotations(path)
+
+
+def test_human_annotation_import_rejects_modified_snapshot(tmp_path: Path) -> None:
+    path = tmp_path / "annotations.jsonl"
+    export_blind_annotations(
+        [
+            JudgeSample(
+                sample_id="8f0dbdb739676f484782f8d6",
+                question="Q",
+                reference_answer="R",
+                candidate_answer="A",
+                evidence=["E"],
+                model="model",
+                config_id="config",
+                judge_score=4,
+            )
+        ],
+        path,
+    )
+    payload = (
+        path.read_text(encoding="utf-8")
+        .replace('"candidate_answer":"A"', '"candidate_answer":"changed"')
+        .replace("null", "4")
+    )
+    path.write_text(payload, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="content hash"):
         import_human_annotations(path)

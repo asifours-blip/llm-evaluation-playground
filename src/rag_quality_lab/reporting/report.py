@@ -14,7 +14,7 @@ from typing import Any, Literal
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
-from rag_quality_lab.domain.models import CaseResult, ExperimentRecord
+from rag_quality_lab.domain.models import CaseResult, ExperimentRecord, ExperimentStatus
 from rag_quality_lab.experiments.compare import ComparisonResult
 from rag_quality_lab.metrics.calibration import CalibrationResult
 
@@ -42,6 +42,8 @@ def generate_reports(
     """Write canonical JSON and a self-contained HTML view."""
 
     report_badge = badge or ("mock" if experiment.identity.mode == "mock" else "pilot")
+    if report_badge == "final":
+        _validate_final_evidence(experiment, calibration)
     payload = _report_payload(
         experiment,
         badge=report_badge,
@@ -74,6 +76,21 @@ def generate_reports(
         json_sha256=_sha256(json_text),
         html_sha256=_sha256(html_text),
     )
+
+
+def _validate_final_evidence(
+    experiment: ExperimentRecord, calibration: CalibrationResult | None
+) -> None:
+    if experiment.identity.mode != "live":
+        raise ValueError("final evidence requires a live experiment")
+    if experiment.status is not ExperimentStatus.COMPLETED:
+        raise ValueError("final evidence requires a completed experiment")
+    if experiment.identity.dirty:
+        raise ValueError("final evidence requires a clean git identity")
+    if any(result.status != "completed" for result in experiment.case_results):
+        raise ValueError("final evidence cannot contain failed cases")
+    if calibration is None or not calibration.blocking_eligible:
+        raise ValueError("final evidence requires eligible human judge calibration")
 
 
 def _report_payload(

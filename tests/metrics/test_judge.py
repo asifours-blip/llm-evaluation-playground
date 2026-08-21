@@ -7,6 +7,7 @@ from rag_quality_lab.metrics.judge import (
     build_pairwise_judge_prompt,
     build_scalar_judge_prompt,
     parse_judge_verdict,
+    parse_pairwise_verdict,
     resolve_pairwise,
 )
 
@@ -74,3 +75,8 @@ def test_pairwise_prompt_and_tie_are_order_stable() -> None:
     assert "B:\nsecond" in prompt
     assert result.winner == "tie"
     assert not result.position_sensitive
+
+
+def test_pairwise_parser_rejects_empty_reason() -> None:
+    with pytest.raises(ValidationError):
+        parse_pairwise_verdict('{"preferred":"A","reason":""}')

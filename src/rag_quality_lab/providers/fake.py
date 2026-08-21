@@ -3,9 +3,11 @@
 import hashlib
 import math
 from collections.abc import Mapping, Sequence
+from typing import Literal
 
 from rag_quality_lab.domain.models import (
     JudgeVerdict,
+    PairwiseVerdict,
     ProviderResponse,
     StructuredAnswer,
     TokenUsage,
@@ -19,6 +21,7 @@ class FakeEmbeddingProvider:
         if dimensions <= 0:
             raise ValueError("dimensions must be positive")
         self.dimensions = dimensions
+        self.cache_identity = f"fake-hash-v1:{dimensions}"
 
     def embed(
         self, texts: Sequence[str], *, model: str | None = None
@@ -94,6 +97,39 @@ class FakeJudgeProvider:
                 output_tokens=max(
                     1, len(verdict.model_dump_json().encode("utf-8")) // 4
                 ),
+            ),
+            model=model,
+        )
+
+    def pairwise(
+        self,
+        question: str,
+        reference_answer: str,
+        evidence: Sequence[str],
+        answer_a: str,
+        answer_b: str,
+        *,
+        model: str,
+    ) -> ProviderResponse[PairwiseVerdict]:
+        a_exact = answer_a.strip().casefold() == reference_answer.strip().casefold()
+        b_exact = answer_b.strip().casefold() == reference_answer.strip().casefold()
+        preferred: Literal["A", "B", "tie"] = "tie"
+        if a_exact and not b_exact:
+            preferred = "A"
+        elif b_exact and not a_exact:
+            preferred = "B"
+        verdict = PairwiseVerdict(
+            preferred=preferred,
+            reason="deterministic reference comparison",
+        )
+        input_text = " ".join(
+            [question, reference_answer, answer_a, answer_b, *evidence]
+        )
+        return ProviderResponse[PairwiseVerdict](
+            parsed=verdict,
+            usage=TokenUsage(
+                input_tokens=max(1, len(input_text.encode("utf-8")) // 4),
+                output_tokens=max(1, len(verdict.model_dump_json().encode("utf-8")) // 4),
             ),
             model=model,
         )

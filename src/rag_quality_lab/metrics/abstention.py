@@ -28,6 +28,35 @@ class AbstentionSummary:
     true_negative: int
 
 
+def is_effective_abstention(*, abstained: bool, answer: str) -> bool:
+    """Require both the structured flag and an explicit non-answer in the text."""
+
+    if not abstained:
+        return False
+    opening = " ".join(answer.casefold().split())[:180]
+    refusal_markers = (
+        "does not contain",
+        "does not provide",
+        "does not specify",
+        "does not describe",
+        "does not state",
+        "contains no",
+        "has no",
+        "gives no",
+        "defines no",
+        "names no",
+        "no evidence",
+        "insufficient evidence",
+        "cannot answer",
+        "can't answer",
+        "not enough information",
+        "没有",
+        "无法回答",
+        "信息不足",
+    )
+    return any(marker in opening for marker in refusal_markers)
+
+
 def summarize_abstention(
     observations: Sequence[AbstentionObservation],
 ) -> AbstentionSummary:

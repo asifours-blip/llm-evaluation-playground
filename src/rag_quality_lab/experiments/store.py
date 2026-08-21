@@ -17,7 +17,8 @@ from rag_quality_lab.domain.models import (
     ExperimentRecord,
     ExperimentStatus,
 )
-from rag_quality_lab.metrics.calibration import HumanAnnotation
+from rag_quality_lab.metrics.calibration import AnnotationSnapshot, HumanAnnotation
+from rag_quality_lab.metrics.judge import PairwiseComparisonRecord
 
 PRAGMA_NAMES = {"journal_mode", "busy_timeout", "foreign_keys"}
 TERMINAL_STATUSES = {
@@ -198,7 +199,7 @@ class ExperimentStore:
                         """,
                         (
                             experiment_id,
-                            annotation.case_id,
+                            annotation.sample_id,
                             annotation.human_score,
                             _canonical_json(annotation),
                         ),
@@ -217,6 +218,68 @@ class ExperimentStore:
             (experiment_id,),
         ).fetchall()
         return [HumanAnnotation.model_validate_json(row[0]) for row in rows]
+
+    def record_annotation_snapshots(
+        self, experiment_id: str, snapshots: list[AnnotationSnapshot]
+    ) -> None:
+        """Persist the private identity/hash mapping for one blind export."""
+
+        self._status(experiment_id)
+        with self.connection:
+            for snapshot in snapshots:
+                self.connection.execute(
+                    """
+                    INSERT OR REPLACE INTO annotation_snapshots(
+                        experiment_id, sample_id, payload_json
+                    ) VALUES (?, ?, ?)
+                    """,
+                    (
+                        experiment_id,
+                        snapshot.sample_id,
+                        _canonical_json(snapshot),
+                    ),
+                )
+
+    def get_annotation_snapshots(
+        self, experiment_id: str
+    ) -> list[AnnotationSnapshot]:
+        rows = self.connection.execute(
+            """
+            SELECT payload_json FROM annotation_snapshots
+            WHERE experiment_id = ? ORDER BY sample_id
+            """,
+            (experiment_id,),
+        ).fetchall()
+        return [AnnotationSnapshot.model_validate_json(row[0]) for row in rows]
+
+    def record_pairwise_comparison(self, record: PairwiseComparisonRecord) -> None:
+        """Persist one complete two-order judge comparison."""
+
+        self._status(record.baseline_experiment_id)
+        self._status(record.candidate_experiment_id)
+        with self.connection:
+            self.connection.execute(
+                """
+                INSERT INTO pairwise_comparisons(
+                    id, baseline_experiment_id, candidate_experiment_id, payload_json
+                ) VALUES (?, ?, ?, ?)
+                """,
+                (
+                    record.id,
+                    record.baseline_experiment_id,
+                    record.candidate_experiment_id,
+                    _canonical_json(record),
+                ),
+            )
+
+    def get_pairwise_comparison(self, comparison_id: str) -> PairwiseComparisonRecord:
+        row = self.connection.execute(
+            "SELECT payload_json FROM pairwise_comparisons WHERE id = ?",
+            (comparison_id,),
+        ).fetchone()
+        if row is None:
+            raise KeyError(f"unknown pairwise comparison: {comparison_id}")
+        return PairwiseComparisonRecord.model_validate_json(row[0])
 
     def finish_experiment(
         self,
@@ -343,6 +406,21 @@ class ExperimentStore:
                 human_score INTEGER NOT NULL CHECK(human_score BETWEEN 1 AND 5),
                 payload_json TEXT NOT NULL,
                 UNIQUE(experiment_id, case_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS annotation_snapshots (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                experiment_id TEXT NOT NULL REFERENCES experiments(id) ON DELETE CASCADE,
+                sample_id TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                UNIQUE(experiment_id, sample_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS pairwise_comparisons (
+                id TEXT PRIMARY KEY,
+                baseline_experiment_id TEXT NOT NULL REFERENCES experiments(id),
+                candidate_experiment_id TEXT NOT NULL REFERENCES experiments(id),
+                payload_json TEXT NOT NULL
             );
             """
         )

@@ -17,12 +17,14 @@ TOKENS_PER_MILLION = Decimal("1000000")
 
 
 class PlannedCall(BaseModel):
-    """Capped token usage for one repeated provider call shape."""
+    """Aggregate token cap for one repeated provider pipeline stage."""
 
     model: str
     input_token_cap: int = Field(gt=0)
     output_token_cap: int = Field(ge=0)
     count: int = Field(default=1, gt=0)
+    phase: str = "provider"
+    requests_per_case: int = Field(default=1, gt=0)
 
 
 class PreflightDecision(BaseModel):
@@ -188,6 +190,24 @@ class BudgetLedger:
         if self.spent > self.budget.hard_limit:
             raise BudgetExceeded("actual cost exceeded the hard budget")
         return actual
+
+    def charge_reserved(self, reservations: Sequence[Decimal]) -> Decimal:
+        """Conservatively charge a failed pipeline when usage is unavailable."""
+
+        total = sum(reservations, start=Decimal("0"))
+        if any(reservation < 0 for reservation in reservations) or total > self.reserved:
+            raise ValueError("reservation is not outstanding")
+        self.reserved -= total
+        self.spent += total
+        return total
+
+    def release_reserved(self, reservations: Sequence[Decimal]) -> None:
+        """Release calls proven not to have been dispatched."""
+
+        total = sum(reservations, start=Decimal("0"))
+        if any(reservation < 0 for reservation in reservations) or total > self.reserved:
+            raise ValueError("reservation is not outstanding")
+        self.reserved -= total
 
 
 def _model_price(pricing: PricingConfig, model: str) -> ModelPrice:
