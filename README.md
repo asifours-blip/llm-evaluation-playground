@@ -20,7 +20,7 @@ M1 离线闭环已完成。当前提交附带一份由 commit `57ae92eb0e8953f8f
 
 可直接检查 [离线 HTML 报告](docs/artifacts/offline-report.html) 和 [规范化 JSON 产物](docs/artifacts/offline-summary.json)。JSON 与 HTML 的 SHA-256 分别为 `d759dd887e65220123e01d52962a48c96374ca0963647efdcf04abf15231c8e5`、`81385f0ec00dcd77de21a0ae2e0b9f9a31f6cff77518ad404f338ad964162c52`。
 
-M2 主证据已提交，但必须带限定陈述：仓库含 96 case-arm 的 `deepseek-v4-flash` live final、12 条分层人工盲标与通过校准 gate 的摘要（见 `docs/artifacts/final-evidence-summary-2026-08-21.json`）。尚未完成的是：① 带精确 HTTP 物理尝试计数的新 final 重跑（历史 final 的 `http_request_count` 仍为 `null`）；② 经预检确认的 384-arm 付费全矩阵。没有这两项，不得把结论写成“全矩阵 live 已完成”或“HTTP 观测性限制已消除”。
+M2 主证据已提交，但必须带限定陈述：仓库含 96 case-arm 的 `deepseek-v4-flash` live final、12 条分层人工盲标与通过校准 gate 的摘要（见 `docs/artifacts/final-evidence-summary-2026-08-21.json`）。另有一次 HTTP-instrumented 重跑（`c4f32275-...`，见 `docs/artifacts/http-instrumented-2026-08-21/`）：96 arms 全完成，精确物理 HTTP 总计 **203**（`http_request_count_complete=true`），实际成本 ¥0.1735658，badge 为 `pilot`——因新实验尚无本 experiment 的 12 条人工盲标，`report --badge final` 仍被正确拦截。历史 final `544dcc6e-...` 的 `http_request_count` 仍为 `null` 且不改写。尚未完成：① 对该 HTTP 重跑完成 n=12 盲标后发 final；② 经预检确认的 384-arm 付费全矩阵。
 
 ## 架构与关键取舍
 
@@ -112,7 +112,7 @@ rag-quality pairwise --config configs/live-deepseek.example.yaml --database .rag
 
 `report --badge final` 不是自由标签：只有 `live + completed + dirty=false + 零失败 + Judge 校准达标` 才会生成 final 产物。
 
-新版本会把 generation 与 Judge 的物理 HTTP 尝试次数（含重试和结构化输出 repair）逐 case 写入 SQLite，并在报告中仅对完整数据给出精确总数。历史实验无法从 token usage 反推重试次数，因此已归档的 `544dcc6e-b60d-4bd1-bde0-8c8bb89c3508` 仍诚实保留 `http_request_count: null`；只有重新执行且显式确认付费的新 live benchmark 才能消除这条观测性限制。
+新版本会把 generation 与 Judge 的物理 HTTP 尝试次数（含重试和结构化输出 repair）逐 case 写入 SQLite，并在报告中仅对完整数据给出精确总数。历史实验无法从 token usage 反推重试次数，因此已归档的 `544dcc6e-b60d-4bd1-bde0-8c8bb89c3508` 仍诚实保留 `http_request_count: null`。commit `d830372` 上的付费重跑 `c4f32275-7d9a-4594-9043-5e61b52d3064` 已消除新跑批次的该限制：精确总计 203 次 HTTP（85 case×2 + 11 case×3），证据见 [HTTP-instrumented 摘要](docs/artifacts/http-instrumented-2026-08-21/evidence-summary.json)。
 
 ## 质量门禁
 
@@ -130,7 +130,7 @@ rag-quality regression --fixture tests/fixtures/offline_baseline.json
 - 哈希 embedding 故意只作为便宜、可复现的检索弱基线；不能代表生产 embedding。
 - 当前公开产物是 Mock，答案分数不可用于比较真实 LLM。
 - 48 题适合回归与面试讲解，不足以形成广泛统计结论。
-- Judge 执行、双顺序比较、盲标快照校验和校准门禁均可执行；已有 n=12 严格盲标校准通过，但样本小，不能外推为大规模 Judge 可靠性。历史 final 缺少精确 HTTP 尝试计数；新 final 门禁已强制要求该字段完整。
+- Judge 执行、双顺序比较、盲标快照校验和校准门禁均可执行；历史 n=12 严格盲标校准通过，但样本小，不能外推为大规模 Judge 可靠性。历史 final 缺少精确 HTTP 尝试计数；HTTP-instrumented 重跑已具备完整计数，但 final 仍须绑定**同一 experiment** 的人工校准。
 - SQLite 适合本地单写实验；高吞吐多写场景应迁移到服务型数据库。
 
 可核验的简历表述与禁用表述见 [简历证据清单](docs/resume_bullets.md)，面试追问见 [Interview Q&A](docs/interview_qa.md)。

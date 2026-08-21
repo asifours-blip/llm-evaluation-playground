@@ -29,7 +29,8 @@
 
 - 在 48 道题、2 组检索配置（共 96 case-arm）上，以 `deepseek-v4-flash` 完成付费 live benchmark；零失败，实际成本 ¥0.2820596；检索 Recall@k / MRR / context hit 为 0.6944 / 0.5544 / 0.6111（仍使用本地哈希 embedding，不得写成生产 embedding 效果）；JSON SHA-256 `ab971a6b24dfb2c6f25677b201eee5cb26639225fc14ce8374654a790b602d2f`。
 - 对 12 条分层人工盲标做 Judge 校准（1 条边界样本独立复核）：within-one rate 100%、灾难性分歧 0、MAE 0.333、gate pass；n=12 下以容差一致率为主判据，不得外推为大规模 Judge 可靠性证明。
-- 该次 final 产物生成于 HTTP 物理尝试计数 instrumentation 之前，报告中 `http_request_count` 诚实为 `null`；新 final 门禁已要求逐 case 精确 HTTP 计数，重跑付费矩阵前不得声称“已消除该观测性限制”。
+- 该次 final 产物生成于 HTTP 物理尝试计数 instrumentation 之前，报告中 `http_request_count` 诚实为 `null`。
+- 在 commit `d830372` 上完成 HTTP-instrumented 付费重跑 `c4f32275-...`：96 arms、零失败、精确 HTTP **203**（complete=true）、实际成本 ¥0.1735658、badge=`pilot`；final 仍待本实验 12 条盲标。证据：[http-instrumented 摘要](artifacts/http-instrumented-2026-08-21/evidence-summary.json)。
 
 ## 仍不可填写的模板
 
