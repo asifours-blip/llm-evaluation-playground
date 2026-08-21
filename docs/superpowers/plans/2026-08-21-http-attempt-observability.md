@@ -263,7 +263,7 @@ Expected: Ruff clean, strict mypy clean, all tests pass, coverage at least 90%, 
 
 Load the historical final JSON through `ExperimentRecord`/report paths as applicable, verify its published hashes have not changed, verify `.env` remains ignored, and scan tracked files for the exact local API key without printing it.
 
-- [ ] **Step 4: Commit documentation**
+- [x] **Step 4: Commit documentation**
 
 ```powershell
 git add -- README.md
