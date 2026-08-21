@@ -301,7 +301,7 @@ if any(result.http_request_count is None for result in experiment.case_results):
 
 Run the report tests, Ruff, strict mypy, all tests, focused coverage, and offline regression commands from Task 4. Expected: every gate passes.
 
-- [ ] **Step 5: Commit the review fix**
+- [x] **Step 5: Commit the review fix**
 
 ```powershell
 git add -- tests/reporting/test_report.py src/rag_quality_lab/reporting/report.py docs/superpowers/specs/2026-08-21-http-attempt-observability-design.md docs/superpowers/plans/2026-08-21-http-attempt-observability.md
