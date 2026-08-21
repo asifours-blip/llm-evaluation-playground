@@ -30,7 +30,7 @@
 - Modify: `src/rag_quality_lab/providers/openai_compatible.py`
 - Modify: `src/rag_quality_lab/providers/fake.py`
 
-- [ ] **Step 1: Write failing provider tests**
+- [x] **Step 1: Write failing provider tests**
 
 Extend the malformed-answer test and add an exhausted-retry test:
 
@@ -63,7 +63,7 @@ def test_exhausted_retries_expose_attempt_count(make_provider):
 
 Also assert `FakeChatProvider.answer(...).http_request_count == 0` and `FakeJudgeProvider.judge(...).http_request_count == 0`.
 
-- [ ] **Step 2: Run tests and verify RED**
+- [x] **Step 2: Run tests and verify RED**
 
 Run:
 
@@ -73,7 +73,7 @@ python -m pytest tests/providers/test_openai_compatible.py tests/providers/test_
 
 Expected: failures showing that `ProviderResponse` and `ProviderError` do not expose `http_request_count`.
 
-- [ ] **Step 3: Add typed fields and local counting**
+- [x] **Step 3: Add typed fields and local counting**
 
 Add these model fields:
 
@@ -112,11 +112,11 @@ def _observe_http_requests() -> Iterator[_RequestCounter]:
 
 `ProviderError.__init__` accepts `http_request_count: int | None = None`; only instrumented OpenAI-compatible error paths fill it. Each `answer`, `judge`, `pairwise`, and `embed` operation opens an observation scope. `_chat_completion` and `_post_json` accept the counter, and `_post_json` executes `counter.count += 1` immediately before `session.post`. Successful typed responses set `http_request_count=counter.count`. Fake chat and Judge responses set `http_request_count=0`.
 
-- [ ] **Step 4: Run focused tests and verify GREEN**
+- [x] **Step 4: Run focused tests and verify GREEN**
 
 Run the same provider test command. Expected: all provider tests pass.
 
-- [ ] **Step 5: Commit provider instrumentation**
+- [x] **Step 5: Commit provider instrumentation**
 
 ```powershell
 git add -- tests/providers/test_openai_compatible.py tests/providers/test_fake_provider.py src/rag_quality_lab/domain/models.py src/rag_quality_lab/providers/openai_compatible.py src/rag_quality_lab/providers/fake.py
@@ -129,7 +129,7 @@ git commit -m "feat: count physical provider HTTP attempts"
 - Modify: `tests/experiments/test_runner.py`
 - Modify: `src/rag_quality_lab/experiments/runner.py`
 
-- [ ] **Step 1: Write failing runner tests**
+- [x] **Step 1: Write failing runner tests**
 
 Create instrumented test providers that return generation count `2`, Judge count `3`, and a failing Judge `ProviderError(..., http_request_count=2)`. Assert:
 
@@ -140,7 +140,7 @@ assert judge_failed.http_request_count == 3  # generation 1 + failed Judge 2
 
 Also assert a retrieval failure records `0`, while an uninstrumented provider exception records `None`.
 
-- [ ] **Step 2: Run runner tests and verify RED**
+- [x] **Step 2: Run runner tests and verify RED**
 
 ```powershell
 python -m pytest tests/experiments/test_runner.py -q
@@ -148,7 +148,7 @@ python -m pytest tests/experiments/test_runner.py -q
 
 Expected: count assertions fail because `CaseResult.http_request_count` is not populated.
 
-- [ ] **Step 3: Implement one case-total reducer**
+- [x] **Step 3: Implement one case-total reducer**
 
 Add a private helper:
 
@@ -166,11 +166,11 @@ Completed results sum generation and Judge counts, using Judge count `0` when Ju
 - metrics: completed generation response count;
 - Judge: completed generation response count plus instrumented Judge error count, otherwise `None`.
 
-- [ ] **Step 4: Run runner tests and verify GREEN**
+- [x] **Step 4: Run runner tests and verify GREEN**
 
 Run the same runner test command. Expected: all runner tests pass.
 
-- [ ] **Step 5: Commit runner persistence**
+- [x] **Step 5: Commit runner persistence**
 
 ```powershell
 git add -- tests/experiments/test_runner.py src/rag_quality_lab/experiments/runner.py
@@ -185,7 +185,7 @@ git commit -m "feat: persist per-case HTTP attempt totals"
 - Modify: `src/rag_quality_lab/reporting/report.py`
 - Modify: `src/rag_quality_lab/reporting/templates/report.html.jinja2`
 
-- [ ] **Step 1: Write failing persistence and report tests**
+- [x] **Step 1: Write failing persistence and report tests**
 
 Set `http_request_count=3` in the store fixture and assert it survives the SQLite JSON round trip. Set the report fixture count to `3` and assert:
 
@@ -197,7 +197,7 @@ assert "HTTP requests" in html
 
 Create a copied experiment whose case count is `None` and assert the JSON aggregate is `None` with completeness `False`.
 
-- [ ] **Step 2: Run tests and verify RED**
+- [x] **Step 2: Run tests and verify RED**
 
 ```powershell
 python -m pytest tests/experiments/test_store.py tests/reporting/test_report.py -q
@@ -205,7 +205,7 @@ python -m pytest tests/experiments/test_store.py tests/reporting/test_report.py 
 
 Expected: report system fields and HTML label are absent.
 
-- [ ] **Step 3: Implement complete-or-unknown aggregation**
+- [x] **Step 3: Implement complete-or-unknown aggregation**
 
 In `_system_metrics`:
 
@@ -226,11 +226,11 @@ return {
 
 Update the return annotation to permit `bool | None`. Add an HTML system card that renders the integer when complete and `unknown` otherwise.
 
-- [ ] **Step 4: Run focused tests and verify GREEN**
+- [x] **Step 4: Run focused tests and verify GREEN**
 
 Run the same store/report test command. Expected: all tests pass.
 
-- [ ] **Step 5: Commit persistence and reporting**
+- [x] **Step 5: Commit persistence and reporting**
 
 ```powershell
 git add -- tests/experiments/test_store.py tests/reporting/test_report.py src/rag_quality_lab/reporting/report.py src/rag_quality_lab/reporting/templates/report.html.jinja2
@@ -243,11 +243,11 @@ git commit -m "feat: report exact HTTP attempt totals"
 - Modify: `README.md`
 - Verify: `.github/workflows/ci.yml`
 
-- [ ] **Step 1: Document the field and legacy behavior**
+- [x] **Step 1: Document the field and legacy behavior**
 
 Add one concise README note: new instrumented reports expose exact generation-and-Judge HTTP attempts; historical artifacts retain `null` because retries cannot be reconstructed.
 
-- [ ] **Step 2: Run all quality gates**
+- [x] **Step 2: Run all quality gates**
 
 ```powershell
 python -m ruff check .
@@ -259,7 +259,7 @@ rag-quality regression --fixture tests/fixtures/offline_baseline.json
 
 Expected: Ruff clean, strict mypy clean, all tests pass, coverage at least 90%, and regression `passed: true`.
 
-- [ ] **Step 3: Verify compatibility and secrets**
+- [x] **Step 3: Verify compatibility and secrets**
 
 Load the historical final JSON through `ExperimentRecord`/report paths as applicable, verify its published hashes have not changed, verify `.env` remains ignored, and scan tracked files for the exact local API key without printing it.
 

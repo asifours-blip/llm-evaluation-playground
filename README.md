@@ -16,7 +16,7 @@ M1 离线闭环已完成。当前提交附带一份由 commit `57ae92eb0e8953f8f
 | Recall@k / MRR / context hit | 0.4722 / 0.4740 / 0.4028 | 确定性哈希 embedding 是弱基线，结果没有被包装成高质量检索 |
 | 生成 / 拒答 | 1.0 / 1.0 | Mock 回放参考答案，仅证明指标和拒答链路，不代表真实模型质量 |
 | 成本 | ¥0 | 离线运行不读取 API Key、不发网络请求 |
-| 聚焦逻辑覆盖率 | 95.52% | 领域、配置、指标、预算、回归模块的 branch coverage；网络胶水不靠 mock 数字撑门面 |
+| 聚焦逻辑覆盖率 | 95.53% | 领域、配置、指标、预算、回归模块的 branch coverage；网络胶水不靠 mock 数字撑门面 |
 
 可直接检查 [离线 HTML 报告](docs/artifacts/offline-report.html) 和 [规范化 JSON 产物](docs/artifacts/offline-summary.json)。JSON 与 HTML 的 SHA-256 分别为 `d759dd887e65220123e01d52962a48c96374ca0963647efdcf04abf15231c8e5`、`81385f0ec00dcd77de21a0ae2e0b9f9a31f6cff77518ad404f338ad964162c52`。
 
@@ -101,7 +101,7 @@ rag-quality calibrate --database .ragql/experiments.sqlite3 --experiment latest-
 rag-quality report --database .ragql/experiments.sqlite3 --experiment latest-live --output artifacts/calibrated
 ```
 
-重建报告会从 SQLite 的人工标注和逐题 Judge 分数确定性重算校准结果。少于 12 条，或 within-one rate < 0.80、MAE > 1.0 时，Judge 只能作为诊断指标。仓库当前没有人类填写的文件，这是刻意保留的外部证据边界。
+重建报告会从 SQLite 的人工标注和逐题 Judge 分数确定性重算校准结果。通用 CLI 的阻断基线是至少 12 条、within-one rate >= 0.80 且 MAE <= 1.0；本次真实 benchmark 采用了更严格的人工协议：within-one rate >= 0.90、灾难性分歧为 0、平均有符号差绝对值 <= 0.5。12 条完成盲标、独立复核记录和通过结果分别见 [复核后盲标](docs/artifacts/blind_label_completed-strict-judge-adjudicated-2026-08-21.csv)、[复核记录](docs/artifacts/calibration-adjudication-strict-judge-2026-08-21.json) 与 [严格校准报告](docs/artifacts/calibrate-strict-judge-adjudicated-2026-08-21.json)。
 
 最终配置可以执行双顺序比较；每个 case/model 只有 A/B 与 B/A 归一化偏好一致时才计入胜率：
 
@@ -111,6 +111,8 @@ rag-quality pairwise --config configs/live-deepseek.example.yaml --database .rag
 ```
 
 `report --badge final` 不是自由标签：只有 `live + completed + dirty=false + 零失败 + Judge 校准达标` 才会生成 final 产物。
+
+新版本会把 generation 与 Judge 的物理 HTTP 尝试次数（含重试和结构化输出 repair）逐 case 写入 SQLite，并在报告中仅对完整数据给出精确总数。历史实验无法从 token usage 反推重试次数，因此已归档的 `544dcc6e-b60d-4bd1-bde0-8c8bb89c3508` 仍诚实保留 `http_request_count: null`；只有重新执行且显式确认付费的新 live benchmark 才能消除这条观测性限制。
 
 ## 质量门禁
 
