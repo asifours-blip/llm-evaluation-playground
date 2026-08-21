@@ -1,0 +1,9 @@
+{
+  "artifact_type": "human_calibration_protocol",
+  "version": "reference-answer-v1",
+  "experiment_id": "544dcc6e-b60d-4bd1-bde0-8c8bb89c3508",
+  "sample_manifest": "docs/artifacts/sample_manifest-strict-judge-2026-08-21.json",
+  "template": "docs/artifacts/blind_label_template-strict-judge-2026-08-21.csv",
+  "human_scoring_target": "Answer correctness relative to the reference answer; use context as supporting evidence.",
+  "judge_score_visibility": "hidden_until_import_validation"
+}
