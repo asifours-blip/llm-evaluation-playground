@@ -20,7 +20,7 @@ M1 离线闭环已完成。当前提交附带一份由 commit `57ae92eb0e8953f8f
 
 可直接检查 [离线 HTML 报告](docs/artifacts/offline-report.html) 和 [规范化 JSON 产物](docs/artifacts/offline-summary.json)。JSON 与 HTML 的 SHA-256 分别为 `d759dd887e65220123e01d52962a48c96374ca0963647efdcf04abf15231c8e5`、`81385f0ec00dcd77de21a0ae2e0b9f9a31f6cff77518ad404f338ad964162c52`。
 
-M2 主证据已提交，但必须带限定陈述：仓库含 96 case-arm 的 `deepseek-v4-flash` live final、12 条分层人工盲标与通过校准 gate 的摘要（见 `docs/artifacts/final-evidence-summary-2026-08-21.json`）。另有一次 HTTP-instrumented 重跑（`c4f32275-...`，见 `docs/artifacts/http-instrumented-2026-08-21/`）：96 arms 全完成，精确物理 HTTP 总计 **203**（`http_request_count_complete=true`），实际成本 ¥0.1735658，badge 为 `pilot`——因新实验尚无本 experiment 的 12 条人工盲标，`report --badge final` 仍被正确拦截。历史 final `544dcc6e-...` 的 `http_request_count` 仍为 `null` 且不改写。384-arm 付费全矩阵已完成（`72f6a56d-...`，见 `docs/artifacts/live-384-2026-08-21/`）：384/384、零失败、精确 HTTP **817**、实际成本 ¥0.6644544、badge=`pilot`。中断半成品 `3f42f3b6-...`（251/384）已标 failed，不作全矩阵证据。尚未完成：对 HTTP-instrumented 96-arm 或 384-arm **同一 experiment** 补 n=12 盲标后才能发新 final。
+M2 主证据已提交，但必须带限定陈述：仓库含 96 case-arm 的 `deepseek-v4-flash` live final、12 条分层人工盲标与通过校准 gate 的摘要（见 `docs/artifacts/final-evidence-summary-2026-08-21.json`）。另有一次 HTTP-instrumented 重跑（`c4f32275-...`，见 `docs/artifacts/http-instrumented-2026-08-21/`）：96 arms 全完成，精确物理 HTTP 总计 **203**，实际成本 ¥0.1735658；本 experiment 的 12 条现场盲标已导入，校准 within-one 100%、MAE ≈ 0.083，**badge=`final`**。历史 final `544dcc6e-...` 的 `http_request_count` 仍为 `null` 且不改写。384-arm 付费全矩阵已完成（`72f6a56d-...`，见 `docs/artifacts/live-384-2026-08-21/`）：384/384、零失败、精确 HTTP **817**、实际成本 ¥0.6644544、badge=`pilot`（缺本实验盲标）。中断半成品 `3f42f3b6-...` 已标 failed，不作全矩阵证据。
 
 ## 架构与关键取舍
 

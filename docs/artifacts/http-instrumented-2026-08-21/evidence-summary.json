@@ -9,7 +9,7 @@
   "case_arms": 96,
   "completed_case_arms": 96,
   "failed_case_arms": 0,
-  "badge_emitted": "pilot",
+  "badge_emitted": "final",
   "http_request_count": 203,
   "http_request_count_complete": true,
   "http_request_count_min": 2,
@@ -40,8 +40,23 @@
     "html": "docs\\artifacts\\http-instrumented-2026-08-21\\c4f32275-7d9a-4594-9043-5e61b52d3064.html",
     "html_sha256": "9b0c38e79705a22e588732e899d4ab8c85cc3a9e727559a9da02574e4af0bbdb"
   },
-  "final_badge_status": "blocked_pending_human_calibration",
-  "final_badge_note": "HTTP evidence is complete on this experiment. report --badge final still requires eligible human judge calibration on THIS experiment_id. A 12-row blind template was exported; historical labels from 544dcc6e must not be reused across experiments.",
+  "human_calibration": {
+    "protocol": "reference-answer-v1 live session 2026-08-21",
+    "sample_count": 12,
+    "exact_agreement": 0.9166666666666666,
+    "within_one_rate": 1.0,
+    "mean_absolute_error": 0.08333333333333333,
+    "blocking_eligible": true,
+    "completed_labels": "docs/artifacts/http-instrumented-2026-08-21/blind_label_completed.jsonl"
+  },
+  "final_reports": {
+    "json": "docs/artifacts/http-instrumented-2026-08-21/final/c4f32275-7d9a-4594-9043-5e61b52d3064.json",
+    "json_sha256": "073564bd9297e552f4ca957d3d2a30b235e39cd2bd69dac7e8c006f546b7ef71",
+    "html": "docs/artifacts/http-instrumented-2026-08-21/final/c4f32275-7d9a-4594-9043-5e61b52d3064.html",
+    "html_sha256": "b57c0acd22ecefd37dc018ce8cc2cd9e7428d6cdac980324b17372b9ea0992a1"
+  },
+  "final_badge_status": "issued",
+  "final_badge_note": "Same-experiment n=12 human labels imported; CLI calibration gate passed; HTTP counts complete.",
   "blind_label_template": "docs/artifacts/http-instrumented-2026-08-21/blind_label_template.jsonl",
-  "resume_claim_status": "http_observability_limit_cleared_for_new_runs; final_badge_awaits_n12_labels"
+  "resume_claim_status": "http_instrumented_live_final_eligible_with_n12_qualification"
 }
