@@ -115,7 +115,7 @@ class ProviderError(RuntimeError):
         *,
         retryable: bool = False,
         status_code: int | None = None,
-        http_request_count: int = 0,
+        http_request_count: int | None = None,
     ) -> None:
         super().__init__(message)
         self.retryable = retryable

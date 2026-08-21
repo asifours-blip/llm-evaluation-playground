@@ -385,6 +385,10 @@ def _evaluate_task(
             config.provider.judge_model if judge_response is not None else None
         ),
         judge_usage=judge_response.usage if judge_response is not None else None,
+        http_request_count=_known_http_request_total(
+            response.http_request_count,
+            judge_response.http_request_count if judge_response is not None else 0,
+        ),
         latency_ms=(
             response.latency_ms
             + (judge_response.latency_ms if judge_response is not None else 0)
@@ -421,6 +425,7 @@ def _failed_case_result(
         answer=failure.response.parsed if failure.response is not None else None,
         retrieval_hits=failure.hits,
         usage=failure.response.usage if failure.response is not None else None,
+        http_request_count=_failed_http_request_count(failure),
         latency_ms=(
             failure.response.latency_ms if failure.response is not None else 0
         ),
@@ -430,6 +435,32 @@ def _failed_case_result(
         failure_phase=failure.phase,
         error=error,
     )
+
+
+def _failed_http_request_count(failure: _TaskFailure) -> int | None:
+    if failure.phase == "retrieval":
+        return 0
+    failed_operation_count = (
+        failure.cause.http_request_count
+        if isinstance(failure.cause, ProviderError)
+        else None
+    )
+    if failure.phase == "generation":
+        return failed_operation_count
+    generation_count = (
+        failure.response.http_request_count
+        if failure.response is not None
+        else None
+    )
+    if failure.phase == "metrics":
+        return generation_count
+    return _known_http_request_total(generation_count, failed_operation_count)
+
+
+def _known_http_request_total(*counts: int | None) -> int | None:
+    if any(count is None for count in counts):
+        return None
+    return sum(count for count in counts if count is not None)
 
 
 def _reconcile_failed_reservations(

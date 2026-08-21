@@ -10,6 +10,7 @@ from rag_quality_lab.domain.models import (
     EvaluationDataset,
     ExperimentConfig,
     ExperimentStatus,
+    JudgeVerdict,
     ProviderConfig,
     ProviderResponse,
     RetrievalConfig,
@@ -71,6 +72,65 @@ class PartiallyFailingChatProvider:
             usage=TokenUsage(input_tokens=20, output_tokens=10),
             model=model,
         )
+
+
+class CountingChatProvider(FakeChatProvider):
+    def __init__(
+        self, answers: dict[str, StructuredAnswer], *, http_request_count: int
+    ) -> None:
+        super().__init__(answers)
+        self.http_request_count = http_request_count
+
+    def answer(
+        self,
+        question: str,
+        contexts: Sequence[str],
+        *,
+        model: str,
+        instructions: str | None = None,
+    ) -> ProviderResponse[StructuredAnswer]:
+        return super().answer(
+            question,
+            contexts,
+            model=model,
+            instructions=instructions,
+        ).model_copy(update={"http_request_count": self.http_request_count})
+
+
+class CountingJudgeProvider(FakeJudgeProvider):
+    def __init__(self, *, http_request_count: int) -> None:
+        self.http_request_count = http_request_count
+
+    def judge(
+        self,
+        question: str,
+        reference_answer: str,
+        candidate_answer: str,
+        evidence: Sequence[str],
+        *,
+        model: str,
+    ) -> ProviderResponse[JudgeVerdict]:
+        return super().judge(
+            question,
+            reference_answer,
+            candidate_answer,
+            evidence,
+            model=model,
+        ).model_copy(update={"http_request_count": self.http_request_count})
+
+
+class FailingJudgeProvider(FakeJudgeProvider):
+    def judge(
+        self,
+        question: str,
+        reference_answer: str,
+        candidate_answer: str,
+        evidence: Sequence[str],
+        *,
+        model: str,
+    ) -> ProviderResponse[JudgeVerdict]:
+        del question, reference_answer, candidate_answer, evidence, model
+        raise ProviderError("simulated judge failure", http_request_count=2)
 
 
 def scripted_dataset() -> EvaluationDataset:
@@ -189,17 +249,43 @@ def test_runner_persists_judge_score_usage_and_summary(tmp_path: Path) -> None:
     )
     bundle = ProviderBundle(
         embedding=FakeEmbeddingProvider(dimensions=32),
-        chat=FakeChatProvider(scripted_answers()),
-        judge=FakeJudgeProvider(),
+        chat=CountingChatProvider(scripted_answers(), http_request_count=2),
+        judge=CountingJudgeProvider(http_request_count=3),
     )
 
     result = run_experiment(config, bundle, scripted_dataset())
 
     assert all(case.judge is not None for case in result.case_results)
     assert all(case.judge_usage is not None for case in result.case_results)
+    assert all(case.http_request_count == 5 for case in result.case_results)
     assert {case.metrics["judge_score"] for case in result.case_results} == {2.0, 5.0}
     assert result.summary["judge_mean_score"] == 3.5
     assert result.summary["judge_pass_rate"] == 0.5
+
+
+def test_runner_persists_attempts_from_an_isolated_judge_failure(
+    tmp_path: Path,
+) -> None:
+    config = experiment_config(tmp_path)
+    config = config.model_copy(
+        update={
+            "provider": config.provider.model_copy(
+                update={"judge_model": "failing-judge"}
+            )
+        }
+    )
+    bundle = ProviderBundle(
+        embedding=FakeEmbeddingProvider(dimensions=32),
+        chat=CountingChatProvider(scripted_answers(), http_request_count=1),
+        judge=FailingJudgeProvider(),
+    )
+
+    result = run_experiment(config, bundle, scripted_dataset())
+
+    assert len(result.case_results) == 2
+    assert all(case.status == "failed" for case in result.case_results)
+    assert all(case.failure_phase == "judge" for case in result.case_results)
+    assert all(case.http_request_count == 3 for case in result.case_results)
 
 
 def test_runner_preflight_budget_exceeded_schedules_no_paid_cases(
@@ -260,6 +346,7 @@ def test_runner_isolates_provider_failure_and_persists_the_failed_case(
     assert failed.case_id == "rag-002"
     assert failed.failure_phase == "generation"
     assert failed.error == "simulated provider failure"
+    assert failed.http_request_count is None
     assert result.summary["completed_cases"] == 1.0
     assert result.summary["failure_count"] == 1.0
 
