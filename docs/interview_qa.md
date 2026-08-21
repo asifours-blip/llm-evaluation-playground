@@ -46,11 +46,11 @@ Judge 输出必须满足 1–5 分 schema，`passed` 与分数阈值强绑定。
 
 ## Q12：现在有 Judge 与人工一致率吗？
 
-没有。代码和测试覆盖了结构化 rubric、顺序控制、盲标导入和一致性阈值，但仓库没有真实 live Judge 分数和独立人工标注。面试中应把它说成“已实现但待外部证据验证”，不能说成“Judge 已可靠”。
+有，但是小样本、带限定。`docs/artifacts/final-evidence-summary-2026-08-21.json` 记录了 12 条分层盲标（含 1 条边界复核）：within-one rate 100%、灾难性分歧 0、MAE ≈ 0.33，校准 gate 通过。面试应说“在 n=12 协议下通过了更严的人工校准门禁”，不能说成“Judge 已在大规模上可靠”或省略样本规模。
 
 ## Q13：为什么覆盖率只卡纯逻辑模块？
 
-领域、配置、指标、预算和比较逻辑适合穷举边界，当前聚焦 branch coverage 为 95.16%。Provider、CLI、SQLite 与模板边界用行为集成测试验证；全包 strict mypy 另行覆盖类型边界。为了全仓数字给每条网络路径堆 mock，不会增加真实可靠性。
+领域、配置、指标、预算和比较逻辑适合穷举边界，当前聚焦 branch coverage 为 95.53%。Provider、CLI、SQLite 与模板边界用行为集成测试验证；全包 strict mypy 另行覆盖类型边界。为了全仓数字给每条网络路径堆 mock，不会增加真实可靠性。
 
 ## Q14：如何避免 CI 回归 fixture 造假？
 
@@ -62,4 +62,4 @@ Fixture 只保存真实配置、提交的 384-case baseline 报告路径和规�
 
 ## Q16：如果继续做，优先级是什么？
 
-先完成 M2：核验当日官方价格，预算预检，运行小规模 live pilot，再跑 final 配置；导出 12–15 条盲标交给人类填写，计算 Judge 一致率后才发布模型质量数字。仪表盘、Docker 和三版本 CI 都是展示增强，不能抢在证据闭环前面。
+M2 主证据已具备（96-arm live + 12 条盲标校准）。下一步优先：① 在确认预算后，用已 instrument 的 HTTP 计数重跑 live，消掉历史 `http_request_count: null`；② 若要写 384-arm 付费结论，先跑 dated preflight 并显式确认；③ 需要对比句时用 `compare`/`pairwise` 产物，不手算。仪表盘、Docker 和多版本 CI 仍是展示增强，不能抢在新证据前面。

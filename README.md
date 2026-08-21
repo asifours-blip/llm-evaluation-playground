@@ -20,7 +20,7 @@ M1 离线闭环已完成。当前提交附带一份由 commit `57ae92eb0e8953f8f
 
 可直接检查 [离线 HTML 报告](docs/artifacts/offline-report.html) 和 [规范化 JSON 产物](docs/artifacts/offline-summary.json)。JSON 与 HTML 的 SHA-256 分别为 `d759dd887e65220123e01d52962a48c96374ca0963647efdcf04abf15231c8e5`、`81385f0ec00dcd77de21a0ae2e0b9f9a31f6cff77518ad404f338ad964162c52`。
 
-M2 尚未伪装成完成：仓库没有提交付费 live benchmark，也没有人类填写的 12 条盲标，因此没有发布“模型质量提升”或“Judge 与人工一致率”数字。相关命令、预算闸门和校准逻辑已经具备，外部证据完成后才能升级简历结论。
+M2 主证据已提交，但必须带限定陈述：仓库含 96 case-arm 的 `deepseek-v4-flash` live final、12 条分层人工盲标与通过校准 gate 的摘要（见 `docs/artifacts/final-evidence-summary-2026-08-21.json`）。尚未完成的是：① 带精确 HTTP 物理尝试计数的新 final 重跑（历史 final 的 `http_request_count` 仍为 `null`）；② 经预检确认的 384-arm 付费全矩阵。没有这两项，不得把结论写成“全矩阵 live 已完成”或“HTTP 观测性限制已消除”。
 
 ## 架构与关键取舍
 
@@ -130,7 +130,7 @@ rag-quality regression --fixture tests/fixtures/offline_baseline.json
 - 哈希 embedding 故意只作为便宜、可复现的检索弱基线；不能代表生产 embedding。
 - 当前公开产物是 Mock，答案分数不可用于比较真实 LLM。
 - 48 题适合回归与面试讲解，不足以形成广泛统计结论。
-- Judge 执行、双顺序比较、盲标快照校验和校准门禁均可执行，但没有付费 live Judge + 人工盲标产物，因此 Judge 可靠性仍待外部证据验证。
+- Judge 执行、双顺序比较、盲标快照校验和校准门禁均可执行；已有 n=12 严格盲标校准通过，但样本小，不能外推为大规模 Judge 可靠性。历史 final 缺少精确 HTTP 尝试计数；新 final 门禁已强制要求该字段完整。
 - SQLite 适合本地单写实验；高吞吐多写场景应迁移到服务型数据库。
 
 可核验的简历表述与禁用表述见 [简历证据清单](docs/resume_bullets.md)，面试追问见 [Interview Q&A](docs/interview_qa.md)。
