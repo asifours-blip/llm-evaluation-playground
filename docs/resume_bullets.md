@@ -31,13 +31,13 @@
 - 对 12 条分层人工盲标做 Judge 校准（1 条边界样本独立复核）：within-one rate 100%、灾难性分歧 0、MAE 0.333、gate pass；n=12 下以容差一致率为主判据，不得外推为大规模 Judge 可靠性证明。
 - 该次 final 产物生成于 HTTP 物理尝试计数 instrumentation 之前，报告中 `http_request_count` 诚实为 `null`。
 - 在 commit `d830372` 上完成 HTTP-instrumented 付费重跑 `c4f32275-...`：96 arms、零失败、精确 HTTP **203**、实际成本 ¥0.1735658；同实验 12 条现场盲标校准 within-one 100%、MAE ≈ 0.083、gate pass，**badge=`final`**。证据：[http-instrumented 摘要](artifacts/http-instrumented-2026-08-21/evidence-summary.json)，JSON SHA-256 `073564bd9297e552f4ca957d3d2a30b235e39cd2bd69dac7e8c006f546b7ef71`。
-- 在 commit `dbeca79` 上完成 384-arm 付费全矩阵 `72f6a56d-...`：384/384、零失败、精确 HTTP **817**、实际成本 ¥0.6644544、badge=`pilot`。证据：[384 摘要](artifacts/live-384-2026-08-21/evidence-summary.json)。
+- 在 commit `dbeca79` 上完成 384-arm 付费全矩阵 `72f6a56d-...`：384/384、零失败、精确 HTTP **817**、实际成本 ¥0.6644544；同实验 12 条现场盲标校准 exact/within-one 100%、MAE 0，**badge=`final`**。12 条为易定义题，不得写成困难样本上的 Judge 已可靠。证据：[384 摘要](artifacts/live-384-2026-08-21/evidence-summary.json)，JSON SHA-256 `0cd5e5420682bd10c590cd885d9e034a1a139c04a2fd9967465c689519c7220c`。
 
 ## 仍不可填写的模板
 
 以下在缺少对应新证据前禁止估算填写：
 
-- 把 384 live 写成 final：当前 `72f6a56d-...` 仅为 `pilot`（缺本实验 n=12 盲标）。可写的限定句：384 case-arm、`deepseek-v4-flash`、零失败、精确 HTTP 817、实际成本 ¥0.6644544；检索 Recall@k 0.6354（哈希 embedding 弱基线）。证据：[384 摘要](artifacts/live-384-2026-08-21/evidence-summary.json)。
+- 把 384 的 n=12 校准写成“困难样本上 Judge 已可靠”：该次抽到的是易定义题（abstention / false-answer rate），exact 100% 不能外推。
 - 相对某 baseline 的“答案 F1 从 A 提升到 B / P95 延迟”等对比句——须来自同协议 compare 产物，不能从单次摘要手算。
 
 ## 发布前核对

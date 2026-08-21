@@ -9,7 +9,7 @@
   "case_arms": 384,
   "completed_case_arms": 384,
   "failed_case_arms": 0,
-  "badge_emitted": "pilot",
+  "badge_emitted": "final",
   "http_request_count": 817,
   "http_request_count_complete": true,
   "http_request_count_min": 2,
@@ -40,6 +40,22 @@
     "html": "docs\\artifacts\\live-384-2026-08-21\\72f6a56d-9858-4d6e-b0b7-7ec884abae54.html",
     "html_sha256": "64c9feea11fa655249932f5be34ce17863f790f7b5c183642e02b726d69b74fc"
   },
-  "final_badge_status": "blocked_pending_human_calibration",
-  "resume_claim_status": "384_live_matrix_completed_as_pilot_with_exact_http; final_requires_n12_labels_on_this_experiment"
+  "human_calibration": {
+    "protocol": "reference-answer-v1 live session 2026-08-21",
+    "sample_count": 12,
+    "sample_design_note": "Exporter drew 8 abstention-definition arms and 4 false-answer-rate arms; easy definition items, not a hard held-out mix.",
+    "exact_agreement": 1.0,
+    "within_one_rate": 1.0,
+    "mean_absolute_error": 0.0,
+    "blocking_eligible": true,
+    "completed_labels": "docs/artifacts/live-384-2026-08-21/blind_label_completed.jsonl"
+  },
+  "final_reports": {
+    "json": "docs/artifacts/live-384-2026-08-21/final/72f6a56d-9858-4d6e-b0b7-7ec884abae54.json",
+    "json_sha256": "0cd5e5420682bd10c590cd885d9e034a1a139c04a2fd9967465c689519c7220c",
+    "html": "docs/artifacts/live-384-2026-08-21/final/72f6a56d-9858-4d6e-b0b7-7ec884abae54.html",
+    "html_sha256": "d59fea7772474beec3fa2a738946a688889b3d9ea956d9cd77346a62de1c8a66"
+  },
+  "final_badge_status": "issued",
+  "resume_claim_status": "384_live_final_with_exact_http_and_n12_easy-item_qualification"
 }
