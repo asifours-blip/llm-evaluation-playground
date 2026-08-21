@@ -92,11 +92,11 @@ Live 运行的安全链条如下：
 
 Judge 辅助模块固定 1–5 分结构化 schema，`score >= 4` 与 `passed=true` 是模型不变量。Pairwise 比较对 A/B 和 B/A 各评一次；若归一化偏好不一致，标为 position-sensitive，不输出赢家。
 
-人工标注导出会物理移除模型、配置和 Judge 分数，只保留问题、参考答案、候选答案和证据。至少 12 条完整盲标，且 within-one rate ≥ 0.80、MAE ≤ 1.0 时，Judge 才具备回归阻断资格。当前仓库没有真实人工标注产物，所以不能宣称 Judge 已可靠。
+人工标注导出会物理移除模型、配置和 Judge 分数，只保留 `case_id::config_id` 形式的稳定 sample key、问题、参考答案、候选答案和 Judge 实际看到的检索证据。至少 12 条完整盲标，且 within-one rate ≥ 0.80、MAE ≤ 1.0 时，Judge 才具备回归阻断资格。当前仓库没有真实人工标注产物，所以不能宣称 Judge 已可靠。
 
 ## 测试策略
 
-- `domain/config/metrics/budget/compare` 纯逻辑执行 branch coverage 门禁，当前为 97.49%；
+- `domain/config/metrics/budget/compare` 纯逻辑执行 branch coverage 门禁，当前为 97.30%；
 - provider 用窄 HTTP session fake 验证重试、鉴权、脱敏、结构化修复和 usage 解析；
 - runner/store/report/CLI 用集成测试验证真实文件、SQLite、子进程和报告行为；
 - CI 排除 `live` marker，不读取 Key、不产生付费请求；
@@ -106,6 +106,6 @@ Judge 辅助模块固定 1–5 分结构化 schema，`score >= 4` 与 `passed=tr
 
 - 哈希 embedding 是确定性弱基线，不是生产检索模型；
 - M1 Mock 只能证明软件闭环，不能证明 LLM 质量；
-- Live 生成已支持，但正式 M2 仍需要可用凭据、实际成本产物、Judge 执行和独立人工盲标；
+- Live 生成与 Judge 执行已支持，但正式 M2 仍需要可用凭据、实际成本产物和独立人工盲标；
 - 需要多 worker 写入或远程查询时再迁移 PostgreSQL；
 - 需要交互式探索时可增加只读仪表盘，但不能替代规范化报告。

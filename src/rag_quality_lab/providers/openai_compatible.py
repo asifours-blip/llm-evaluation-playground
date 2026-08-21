@@ -13,7 +13,13 @@ from typing import Any, NoReturn, Protocol
 import requests
 from pydantic import ValidationError
 
-from rag_quality_lab.domain.models import ProviderResponse, StructuredAnswer, TokenUsage
+from rag_quality_lab.domain.models import (
+    JudgeVerdict,
+    ProviderResponse,
+    StructuredAnswer,
+    TokenUsage,
+)
+from rag_quality_lab.metrics.judge import build_scalar_judge_prompt, parse_judge_verdict
 
 MAX_ERROR_LENGTH = 500
 
@@ -201,6 +207,57 @@ class OpenAICompatibleProvider:
             self._raise_sanitized("embedding response count does not match input")
         return [embedding for _, embedding in ordered]
 
+    def judge(
+        self,
+        question: str,
+        reference_answer: str,
+        candidate_answer: str,
+        evidence: Sequence[str],
+        *,
+        model: str,
+    ) -> ProviderResponse[JudgeVerdict]:
+        """Score one answer using the fixed structured judge rubric."""
+
+        started_at = time.perf_counter()
+        prompt = build_scalar_judge_prompt(
+            question=question,
+            reference_answer=reference_answer,
+            candidate_answer=candidate_answer,
+            evidence=list(evidence),
+        )
+        primary = self._chat_completion(
+            model=model,
+            messages=[
+                {
+                    "role": "system",
+                    "content": "Apply the supplied rubric. Return one JSON object only.",
+                },
+                {"role": "user", "content": prompt},
+            ],
+        )
+        usage = self._token_usage(primary)
+        final_payload = primary
+        try:
+            parsed = parse_judge_verdict(self._message_content(primary))
+        except (json.JSONDecodeError, TypeError, ValidationError):
+            repaired = self._chat_completion(
+                model=model,
+                messages=self._judge_repair_messages(self._message_content(primary)),
+            )
+            usage = _combine_usage(usage, self._token_usage(repaired))
+            final_payload = repaired
+            try:
+                parsed = parse_judge_verdict(self._message_content(repaired))
+            except (json.JSONDecodeError, TypeError, ValidationError) as error:
+                self._raise_sanitized(f"structured judge validation failed: {error}")
+        return ProviderResponse[JudgeVerdict](
+            parsed=parsed,
+            usage=usage,
+            model=model,
+            latency_ms=(time.perf_counter() - started_at) * 1000,
+            raw=final_payload,
+        )
+
     def _chat_completion(
         self, *, model: str, messages: list[dict[str, str]]
     ) -> dict[str, Any]:
@@ -320,6 +377,22 @@ class OpenAICompatibleProvider:
                 "content": (
                     "Required keys: answer (string), citations (string array), "
                     f"abstained (boolean). Content:\n{content}"
+                ),
+            },
+        ]
+
+    @staticmethod
+    def _judge_repair_messages(content: str) -> list[dict[str, str]]:
+        return [
+            {
+                "role": "system",
+                "content": "Repair the content into valid JSON only; do not rescore it.",
+            },
+            {
+                "role": "user",
+                "content": (
+                    "Required keys: score (integer 1-5), passed (boolean equal to "
+                    f"score >= 4), reason (string). Content:\n{content}"
                 ),
             },
         ]

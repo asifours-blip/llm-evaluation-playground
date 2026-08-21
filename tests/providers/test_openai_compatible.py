@@ -150,6 +150,29 @@ def test_malformed_answer_gets_one_repair_attempt(
     assert len(session.calls) == 2
 
 
+def test_judge_returns_structured_verdict_and_usage(
+    make_provider: Callable[..., OpenAICompatibleProvider],
+) -> None:
+    session = FakeSession(
+        [answer_response('{"score":5,"passed":true,"reason":"fully supported"}')]
+    )
+    provider = make_provider(session=session)
+
+    response = provider.judge(
+        "q",
+        "reference",
+        "candidate",
+        ["evidence"],
+        model="judge-model",
+    )
+
+    assert response.parsed.score == 5
+    assert response.usage.total_tokens == 14
+    request = session.calls[0]["json"]
+    assert request["model"] == "judge-model"
+    assert "Score the candidate" in request["messages"][1]["content"]
+
+
 def test_embeddings_preserve_response_order(
     make_provider: Callable[..., OpenAICompatibleProvider],
 ) -> None:

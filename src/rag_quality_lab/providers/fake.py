@@ -4,7 +4,12 @@ import hashlib
 import math
 from collections.abc import Mapping, Sequence
 
-from rag_quality_lab.domain.models import ProviderResponse, StructuredAnswer, TokenUsage
+from rag_quality_lab.domain.models import (
+    JudgeVerdict,
+    ProviderResponse,
+    StructuredAnswer,
+    TokenUsage,
+)
 
 
 class FakeEmbeddingProvider:
@@ -57,5 +62,38 @@ class FakeChatProvider:
         return ProviderResponse[StructuredAnswer](
             parsed=parsed,
             usage=TokenUsage(input_tokens=input_tokens, output_tokens=output_tokens),
+            model=model,
+        )
+
+
+class FakeJudgeProvider:
+    """Return a deterministic verdict for offline workflow verification."""
+
+    def judge(
+        self,
+        question: str,
+        reference_answer: str,
+        candidate_answer: str,
+        evidence: Sequence[str],
+        *,
+        model: str,
+    ) -> ProviderResponse[JudgeVerdict]:
+        exact = candidate_answer.strip().casefold() == reference_answer.strip().casefold()
+        verdict = JudgeVerdict(
+            score=5 if exact else 2,
+            passed=exact,
+            reason="exact reference match" if exact else "candidate differs from reference",
+        )
+        input_text = " ".join(
+            [question, reference_answer, candidate_answer, *evidence]
+        )
+        return ProviderResponse[JudgeVerdict](
+            parsed=verdict,
+            usage=TokenUsage(
+                input_tokens=max(1, len(input_text.encode("utf-8")) // 4),
+                output_tokens=max(
+                    1, len(verdict.model_dump_json().encode("utf-8")) // 4
+                ),
+            ),
             model=model,
         )

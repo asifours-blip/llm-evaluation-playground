@@ -16,9 +16,17 @@ from rag_quality_lab.domain.models import (
     StructuredAnswer,
     TokenUsage,
 )
-from rag_quality_lab.experiments.runner import ProviderBundle, run_experiment
+from rag_quality_lab.experiments.runner import (
+    ProviderBundle,
+    planned_calls,
+    run_experiment,
+)
 from rag_quality_lab.prompts.engine import PromptEngine
-from rag_quality_lab.providers.fake import FakeChatProvider, FakeEmbeddingProvider
+from rag_quality_lab.providers.fake import (
+    FakeChatProvider,
+    FakeEmbeddingProvider,
+    FakeJudgeProvider,
+)
 
 
 class HighUsageChatProvider:
@@ -147,6 +155,30 @@ def test_offline_runner_persists_separate_retrieval_and_generation_metrics(
     assert result.identity.mode == "mock"
 
 
+def test_runner_persists_judge_score_usage_and_summary(tmp_path: Path) -> None:
+    config = experiment_config(tmp_path)
+    config = config.model_copy(
+        update={
+            "provider": config.provider.model_copy(
+                update={"judge_model": "fake-judge"}
+            )
+        }
+    )
+    bundle = ProviderBundle(
+        embedding=FakeEmbeddingProvider(dimensions=32),
+        chat=FakeChatProvider(scripted_answers()),
+        judge=FakeJudgeProvider(),
+    )
+
+    result = run_experiment(config, bundle, scripted_dataset())
+
+    assert all(case.judge is not None for case in result.case_results)
+    assert all(case.judge_usage is not None for case in result.case_results)
+    assert {case.metrics["judge_score"] for case in result.case_results} == {2.0, 5.0}
+    assert result.summary["judge_mean_score"] == 3.5
+    assert result.summary["judge_pass_rate"] == 0.5
+
+
 def test_runner_marks_budget_exceeded_without_losing_completed_cases(
     tmp_path: Path,
 ) -> None:
@@ -185,3 +217,50 @@ def test_runner_marks_budget_exceeded_without_losing_completed_cases(
 
     assert result.status is ExperimentStatus.BUDGET_EXCEEDED
     assert 0 < len(result.case_results) < len(scripted_dataset().cases)
+
+
+def test_live_runner_preflights_and_settles_generation_and_judge_costs(
+    tmp_path: Path,
+) -> None:
+    config = experiment_config(tmp_path)
+    pricing_path = tmp_path / "pricing.yaml"
+    pricing_path.write_text(
+        yaml.safe_dump(
+            {
+                "provider": "fake",
+                "currency": "CNY",
+                "verified_at": date.today().isoformat(),
+                "source_url": "https://example.com/pricing",
+                "models": {
+                    "fake-model": {"input_cache_miss": 1, "output": 1},
+                    "fake-judge": {"input_cache_miss": 1, "output": 1},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    config = config.model_copy(
+        update={
+            "mode": "live",
+            "pricing_path": pricing_path,
+            "provider": config.provider.model_copy(
+                update={"judge_model": "fake-judge"}
+            ),
+        }
+    )
+    bundle = ProviderBundle(
+        embedding=FakeEmbeddingProvider(dimensions=32),
+        chat=HighUsageChatProvider(scripted_answers()),
+        judge=FakeJudgeProvider(),
+    )
+
+    result = run_experiment(config, bundle, scripted_dataset())
+
+    assert len(planned_calls(config, 2)) == 2
+    assert result.status is ExperimentStatus.COMPLETED
+    expected_cost = sum(
+        case.usage.total_tokens + case.judge_usage.total_tokens
+        for case in result.case_results
+        if case.usage is not None and case.judge_usage is not None
+    ) / 1_000_000
+    assert result.summary["total_cost"] == expected_cost

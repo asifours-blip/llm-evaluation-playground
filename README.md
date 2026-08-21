@@ -16,7 +16,7 @@ M1 离线闭环已完成。当前提交附带一份由 commit `57ae92eb0e8953f8f
 | Recall@k / MRR / context hit | 0.4722 / 0.4740 / 0.4028 | 确定性哈希 embedding 是弱基线，结果没有被包装成高质量检索 |
 | 生成 / 拒答 | 1.0 / 1.0 | Mock 回放参考答案，仅证明指标和拒答链路，不代表真实模型质量 |
 | 成本 | ¥0 | 离线运行不读取 API Key、不发网络请求 |
-| 纯逻辑覆盖率 | 97.49% | 领域、配置、指标、预算、回归模块；网络胶水不靠 mock 覆盖率撑门面 |
+| 纯逻辑覆盖率 | 97.30% | 领域、配置、指标、预算、回归模块；网络胶水不靠 mock 覆盖率撑门面 |
 
 可直接检查 [离线 HTML 报告](docs/artifacts/offline-report.html) 和 [规范化 JSON 产物](docs/artifacts/offline-summary.json)。JSON 与 HTML 的 SHA-256 分别为 `d759dd887e65220123e01d52962a48c96374ca0963647efdcf04abf15231c8e5`、`81385f0ec00dcd77de21a0ae2e0b9f9a31f6cff77518ad404f338ad964162c52`。
 
@@ -85,7 +85,21 @@ rag-quality run --config configs/live-deepseek.example.yaml --preflight-only
 rag-quality run --config configs/live-deepseek.example.yaml --confirm-live-run
 ```
 
-预检不读取 API Key、不发网络请求。示例的 96 次生成调用按每次 2,500 输入、512 输出 token 上限估算：未缓冲成本 `¥1.162368`、1.25× 缓冲成本 `¥1.452960`，低于 `¥18` 预检阈值和 `¥20` 硬上限。价格会变化，真正运行前必须从[官方价格页](https://api-docs.deepseek.com/zh-cn/quick_start/pricing/)重新核验并新增日期化价格文件；历史证据不覆盖。
+预检不读取 API Key、不发网络请求。示例包含 96 次生成（每次上限 2,500 输入、512 输出 token）和 96 次 Judge（2,000 输入、256 输出）：未缓冲成本 `¥1.959552`、1.25× 缓冲成本 `¥2.449440`，低于 `¥18` 预检阈值和 `¥20` 硬上限。价格会变化，真正运行前必须从[官方价格页](https://api-docs.deepseek.com/zh-cn/quick_start/pricing/)重新核验并新增日期化价格文件；历史证据不覆盖。
+
+## Judge 人工盲标
+
+Live 实验会分别保存生成与 Judge 的 model、usage 和合并成本。下面的导出文件物理移除模型名、配置名和 Judge 分数；sample key 使用 `case_id::config_id`，避免同一道题在多组配置下错配：
+
+```bash
+rag-quality annotate export --database .ragql/experiments.sqlite3 --experiment latest-live --count 12 --output docs/artifacts/human-annotations.jsonl
+# 由人类在不知道模型、配置和 Judge 分数的情况下填写 human_score
+rag-quality annotate import --database .ragql/experiments.sqlite3 --experiment latest-live --input docs/artifacts/human-annotations.jsonl
+rag-quality calibrate --database .ragql/experiments.sqlite3 --experiment latest-live
+rag-quality report --database .ragql/experiments.sqlite3 --experiment latest-live --output artifacts/calibrated
+```
+
+重建报告会从 SQLite 的人工标注和逐题 Judge 分数确定性重算校准结果。少于 12 条，或 within-one rate < 0.80、MAE > 1.0 时，Judge 只能作为诊断指标。仓库当前没有人类填写的文件，这是刻意保留的外部证据边界。
 
 ## 质量门禁
 
@@ -103,7 +117,7 @@ rag-quality regression --fixture tests/fixtures/offline_baseline.json
 - 哈希 embedding 故意只作为便宜、可复现的检索弱基线；不能代表生产 embedding。
 - 当前公开产物是 Mock，答案分数不可用于比较真实 LLM。
 - 48 题适合回归与面试讲解，不足以形成广泛统计结论。
-- Judge 的提示、解析、防位置偏差和校准阈值有单测，但没有 live Judge + 人工盲标产物，因此 Judge 指标仍是待验证能力。
+- Judge 执行、解析、防位置偏差和校准阈值有单测，但没有付费 live Judge + 人工盲标产物，因此 Judge 可靠性仍待外部证据验证。
 - SQLite 适合本地单写实验；高吞吐多写场景应迁移到服务型数据库。
 
 可核验的简历表述与禁用表述见 [简历证据清单](docs/resume_bullets.md)，面试追问见 [Interview Q&A](docs/interview_qa.md)。

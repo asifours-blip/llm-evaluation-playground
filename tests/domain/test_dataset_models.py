@@ -1,7 +1,13 @@
 import pytest
 from pydantic import ValidationError
 
-from rag_quality_lab.domain.models import Answerability, EvaluationCase, EvaluationDataset
+from rag_quality_lab.domain.models import (
+    Answerability,
+    CaseResult,
+    EvaluationCase,
+    EvaluationDataset,
+    JudgeVerdict,
+)
 
 
 def test_answerable_case_requires_documents_and_evidence() -> None:
@@ -68,3 +74,14 @@ def test_case_constructors_set_answerability() -> None:
     assert answerable.answerability is Answerability.ANSWERABLE
     assert unanswerable.answerability is Answerability.UNANSWERABLE
     assert unanswerable.expected_document_ids == []
+
+
+def test_case_result_rejects_partial_judge_metadata() -> None:
+    with pytest.raises(ValidationError, match="judge, judge_model, and judge_usage"):
+        CaseResult(
+            case_id="rag-001",
+            config_id="config-a",
+            model="fake-chat",
+            judge=JudgeVerdict(score=5, passed=True, reason="supported"),
+            status="completed",
+        )

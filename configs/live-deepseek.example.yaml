@@ -13,6 +13,7 @@ provider:
   api_key_env: DEEPSEEK_API_KEY
   chat_model: deepseek-v4-flash
   embedding_model: fake-hash-256
+  judge_model: deepseek-v4-flash
   timeout_seconds: 90
   max_retries: 2
 retrieval:

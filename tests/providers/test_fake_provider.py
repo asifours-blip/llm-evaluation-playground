@@ -3,8 +3,12 @@ import math
 import pytest
 
 from rag_quality_lab.domain.models import StructuredAnswer
-from rag_quality_lab.providers.base import ChatProvider, EmbeddingProvider
-from rag_quality_lab.providers.fake import FakeChatProvider, FakeEmbeddingProvider
+from rag_quality_lab.providers.base import ChatProvider, EmbeddingProvider, JudgeProvider
+from rag_quality_lab.providers.fake import (
+    FakeChatProvider,
+    FakeEmbeddingProvider,
+    FakeJudgeProvider,
+)
 
 
 def test_fake_embedding_is_deterministic_and_normalized() -> None:
@@ -42,3 +46,20 @@ def test_scripted_chat_rejects_unscripted_question() -> None:
 
     with pytest.raises(KeyError, match="Unscripted question"):
         provider.answer("Unknown", [], model="fake-model")
+
+
+def test_fake_judge_scores_exact_reference_deterministically() -> None:
+    provider = FakeJudgeProvider()
+
+    response = provider.judge(
+        "What is RAG?",
+        "Retrieval-augmented generation.",
+        "Retrieval-augmented generation.",
+        ["RAG retrieves evidence."],
+        model="fake-judge",
+    )
+
+    assert response.parsed.score == 5
+    assert response.parsed.passed
+    assert response.usage.total_tokens > 0
+    assert isinstance(provider, JudgeProvider)

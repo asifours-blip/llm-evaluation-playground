@@ -108,7 +108,12 @@ def _report_payload(
 
 def _system_metrics(results: Sequence[CaseResult]) -> dict[str, float | int]:
     latencies = [result.latency_ms for result in results if result.status == "completed"]
-    usages = [result.usage for result in results if result.usage is not None]
+    usages = [
+        usage
+        for result in results
+        for usage in (result.usage, result.judge_usage)
+        if usage is not None
+    ]
     return {
         "mean_latency_ms": statistics.fmean(latencies) if latencies else 0.0,
         "p50_latency_ms": statistics.median(latencies) if latencies else 0.0,

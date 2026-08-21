@@ -131,6 +131,31 @@ def test_ledger_reserves_and_settles_actual_usage() -> None:
     assert ledger.spent == actual
 
 
+def test_ledger_atomically_reserves_and_settles_generation_and_judge() -> None:
+    ledger = BudgetLedger(
+        budget=BudgetConfig(hard_limit=Decimal("0.01")),
+        pricing=pricing(input_rate=3, output_rate=6),
+    )
+    calls = [
+        PlannedCall(model="pro", input_token_cap=100, output_token_cap=20),
+        PlannedCall(model="pro", input_token_cap=80, output_token_cap=10),
+    ]
+
+    reservations = ledger.reserve_many(calls)
+    actual = ledger.settle_many(
+        reservations,
+        [
+            ("pro", TokenUsage(input_tokens=90, output_tokens=15)),
+            ("pro", TokenUsage(input_tokens=70, output_tokens=8)),
+        ],
+    )
+
+    assert reservations == [Decimal("0.000420"), Decimal("0.000300")]
+    assert actual == Decimal("0.000618")
+    assert ledger.reserved == 0
+    assert ledger.spent == actual
+
+
 def test_ledger_records_and_raises_when_actual_usage_exceeds_cap() -> None:
     ledger = BudgetLedger(
         budget=BudgetConfig(hard_limit=Decimal("0.000010")),

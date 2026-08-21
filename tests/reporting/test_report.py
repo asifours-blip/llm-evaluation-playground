@@ -9,6 +9,7 @@ from rag_quality_lab.domain.models import (
     ExperimentIdentity,
     ExperimentRecord,
     ExperimentStatus,
+    JudgeVerdict,
     RetrievalHit,
     StructuredAnswer,
     TokenUsage,
@@ -54,6 +55,9 @@ def example_experiment() -> ExperimentRecord:
                 ],
                 metrics={"answer_f1": 1.0, "retrieval_recall_at_k": 1.0},
                 usage=TokenUsage(input_tokens=10, output_tokens=4),
+                judge=JudgeVerdict(score=5, passed=True, reason="supported"),
+                judge_model="fake-judge",
+                judge_usage=TokenUsage(input_tokens=5, output_tokens=2),
                 latency_ms=12.5,
                 cost=Decimal("0.0001"),
                 status="completed",
@@ -76,7 +80,7 @@ def test_report_exposes_identity_quality_cost_and_failures(tmp_path: Path) -> No
     assert payload["identity"]["dataset_hash"] == "dataset-hash"
     assert payload["summary"]["false_answer_rate"] == 0.0
     assert payload["system"]["p95_latency_ms"] == 12.5
-    assert payload["system"]["total_tokens"] == 14
+    assert payload["system"]["total_tokens"] == 21
     assert payload["category_breakdown"]["retrieval"]["answer_f1"] == 1.0
     assert "P95 latency" in html
     assert "MOCK" in html

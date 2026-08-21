@@ -3,6 +3,7 @@
 from rag_quality_lab.experiments.budget import (
     BudgetExceeded,
     BudgetLedger,
+    ExperimentPreflight,
     PlannedCall,
     PreflightDecision,
     calculate_actual_cost,
@@ -25,6 +26,7 @@ __all__ = [
     "BudgetExceeded",
     "BudgetLedger",
     "ComparisonResult",
+    "ExperimentPreflight",
     "ExperimentStore",
     "ProviderBundle",
     "RegressionConfig",

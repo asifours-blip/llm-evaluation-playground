@@ -1,5 +1,6 @@
 """Conservative preflight and actual-cost budget accounting."""
 
+from collections.abc import Sequence
 from datetime import date
 from decimal import Decimal
 
@@ -33,6 +34,17 @@ class PreflightDecision(BaseModel):
     threshold: Decimal
     hard_limit: Decimal
     reason: str
+
+
+class ExperimentPreflight(PreflightDecision):
+    """Auditable plan, price provenance, and budget decision for one run."""
+
+    planned_calls: list[PlannedCall]
+    total_request_count: int = Field(ge=0)
+    pricing_provider: str
+    pricing_verified_at: date
+    pricing_source_url: str
+    pricing_rate_basis: str
 
 
 class BudgetExceeded(RuntimeError):
@@ -121,18 +133,25 @@ class BudgetLedger:
         self.reserved = Decimal("0")
 
     def reserve(self, *, model: str, input_token_cap: int, output_token_cap: int) -> Decimal:
-        reservation = planned_call_cost(
-            PlannedCall(
-                model=model,
-                input_token_cap=input_token_cap,
-                output_token_cap=output_token_cap,
-            ),
-            self.pricing,
-        )
-        if self.spent + self.reserved + reservation > self.budget.hard_limit:
+        return self.reserve_many(
+            [
+                PlannedCall(
+                    model=model,
+                    input_token_cap=input_token_cap,
+                    output_token_cap=output_token_cap,
+                )
+            ]
+        )[0]
+
+    def reserve_many(self, calls: Sequence[PlannedCall]) -> list[Decimal]:
+        """Atomically reserve every provider call required by one case."""
+
+        reservations = [planned_call_cost(call, self.pricing) for call in calls]
+        total = sum(reservations, start=Decimal("0"))
+        if self.spent + self.reserved + total > self.budget.hard_limit:
             raise BudgetExceeded("next capped call could exceed the hard budget")
-        self.reserved += reservation
-        return reservation
+        self.reserved += total
+        return reservations
 
     def settle(
         self,
@@ -141,10 +160,30 @@ class BudgetLedger:
         model: str,
         usage: TokenUsage,
     ) -> Decimal:
-        if reservation < 0 or reservation > self.reserved:
+        return self.settle_many([reservation], [(model, usage)])
+
+    def settle_many(
+        self,
+        reservations: Sequence[Decimal],
+        usages: Sequence[tuple[str, TokenUsage]],
+    ) -> Decimal:
+        """Atomically settle generation and judge usage for one completed case."""
+
+        if len(reservations) != len(usages):
+            raise ValueError("reservations and usages must have the same length")
+        reserved_total = sum(reservations, start=Decimal("0"))
+        if any(reservation < 0 for reservation in reservations) or (
+            reserved_total > self.reserved
+        ):
             raise ValueError("reservation is not outstanding")
-        actual = calculate_actual_cost(usage, _model_price(self.pricing, model))
-        self.reserved -= reservation
+        actual = sum(
+            (
+                calculate_actual_cost(usage, _model_price(self.pricing, model))
+                for model, usage in usages
+            ),
+            start=Decimal("0"),
+        )
+        self.reserved -= reserved_total
         self.spent += actual
         if self.spent > self.budget.hard_limit:
             raise BudgetExceeded("actual cost exceeded the hard budget")

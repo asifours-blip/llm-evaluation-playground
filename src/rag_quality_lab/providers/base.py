@@ -3,7 +3,7 @@
 from collections.abc import Sequence
 from typing import Protocol, runtime_checkable
 
-from rag_quality_lab.domain.models import ProviderResponse, StructuredAnswer
+from rag_quality_lab.domain.models import JudgeVerdict, ProviderResponse, StructuredAnswer
 
 
 @runtime_checkable
@@ -29,3 +29,19 @@ class ChatProvider(Protocol):
         instructions: str | None = None,
     ) -> ProviderResponse[StructuredAnswer]:
         """Return a structured answer and usage metadata."""
+
+
+@runtime_checkable
+class JudgeProvider(Protocol):
+    """Score candidate answers against references and retrieved evidence."""
+
+    def judge(
+        self,
+        question: str,
+        reference_answer: str,
+        candidate_answer: str,
+        evidence: Sequence[str],
+        *,
+        model: str,
+    ) -> ProviderResponse[JudgeVerdict]:
+        """Return a structured scalar verdict and usage metadata."""

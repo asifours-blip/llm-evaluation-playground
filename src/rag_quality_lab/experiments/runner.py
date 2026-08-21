@@ -24,6 +24,7 @@ from rag_quality_lab.domain.models import (
     ExperimentStatus,
     PricingConfig,
     RetrievalConfig,
+    TokenUsage,
 )
 from rag_quality_lab.experiments.budget import (
     BudgetExceeded,
@@ -48,11 +49,13 @@ from rag_quality_lab.metrics.retrieval import (
     reciprocal_rank,
 )
 from rag_quality_lab.prompts.engine import PromptEngine
-from rag_quality_lab.providers.base import ChatProvider, EmbeddingProvider
+from rag_quality_lab.providers.base import ChatProvider, EmbeddingProvider, JudgeProvider
 from rag_quality_lab.retrieval.index import InMemoryIndex, chunk_document, load_documents
 
 GENERATION_INPUT_CAP = 2500
 GENERATION_OUTPUT_CAP = 512
+JUDGE_INPUT_CAP = 2000
+JUDGE_OUTPUT_CAP = 256
 
 
 @dataclass(frozen=True)
@@ -61,6 +64,7 @@ class ProviderBundle:
 
     embedding: EmbeddingProvider
     chat: ChatProvider
+    judge: JudgeProvider | None = None
 
 
 @dataclass(frozen=True)
@@ -84,6 +88,8 @@ def run_experiment(
 ) -> ExperimentRecord:
     """Run all configured case arms and persist each completed outcome."""
 
+    if config.provider.judge_model is not None and providers.judge is None:
+        raise ValueError("judge_model requires a judge provider")
     documents = load_documents(config.knowledge_base_path)
     prompt_engine = PromptEngine()
     identity = _experiment_identity(config, dataset, prompt_engine)
@@ -132,14 +138,7 @@ def _prepare_live_budget(
         raise ValueError("live experiments require a pricing file")
     pricing = load_yaml_model(config.pricing_path, PricingConfig)
     decision = preflight_budget(
-        planned=[
-            PlannedCall(
-                model=config.provider.chat_model,
-                input_token_cap=GENERATION_INPUT_CAP,
-                output_token_cap=GENERATION_OUTPUT_CAP,
-                count=len(tasks),
-            )
-        ],
+        planned=planned_calls(config, len(tasks)),
         pricing=pricing,
         budget=config.budget,
     )
@@ -158,7 +157,7 @@ def _coordinate_tasks(
     ledger: BudgetLedger | None,
     pricing: PricingConfig | None,
 ) -> bool:
-    pending: dict[Future[_TaskOutput], tuple[_Task, Decimal | None]] = {}
+    pending: dict[Future[_TaskOutput], tuple[_Task, list[Decimal]]] = {}
     no_more_tasks = False
     budget_stopped = False
     with ThreadPoolExecutor(max_workers=config.max_workers) as executor:
@@ -173,19 +172,15 @@ def _coordinate_tasks(
                 except StopIteration:
                     no_more_tasks = True
                     break
-                reservation: Decimal | None = None
+                reservations: list[Decimal] = []
                 if ledger is not None:
                     try:
-                        reservation = ledger.reserve(
-                            model=config.provider.chat_model,
-                            input_token_cap=GENERATION_INPUT_CAP,
-                            output_token_cap=GENERATION_OUTPUT_CAP,
-                        )
+                        reservations = ledger.reserve_many(_case_planned_calls(config))
                     except BudgetExceeded:
                         budget_stopped = True
                         break
                 future = executor.submit(_evaluate_task, task, config, providers)
-                pending[future] = (task, reservation)
+                pending[future] = (task, reservations)
 
             if not pending:
                 break
@@ -197,22 +192,20 @@ def _coordinate_tasks(
                     pending[item][0].config_id,
                 ),
             ):
-                _, reservation = pending.pop(future)
+                _, reservations = pending.pop(future)
                 output = future.result()
                 result = output.result
-                if ledger is not None and reservation is not None and pricing is not None:
-                    if result.usage is None:
-                        raise ValueError("live case result requires token usage")
+                if ledger is not None and pricing is not None:
+                    call_usages = _result_call_usages(result, config)
                     try:
-                        actual_cost = ledger.settle(
-                            reservation,
-                            model=config.provider.chat_model,
-                            usage=result.usage,
-                        )
+                        actual_cost = ledger.settle_many(reservations, call_usages)
                     except BudgetExceeded:
-                        actual_cost = calculate_actual_cost(
-                            result.usage,
-                            pricing.models[config.provider.chat_model],
+                        actual_cost = sum(
+                            (
+                                calculate_actual_cost(usage, pricing.models[model])
+                                for model, usage in call_usages
+                            ),
+                            start=Decimal("0"),
                         )
                         budget_stopped = True
                     result = result.model_copy(update={"cost": actual_cost})
@@ -295,6 +288,21 @@ def _evaluate_task(
         "false_answer": float(not expected_answerable and not response.parsed.abstained),
         "over_abstention": float(expected_answerable and response.parsed.abstained),
     }
+    judge_response = None
+    if config.provider.judge_model is not None and providers.judge is not None:
+        judge_response = providers.judge.judge(
+            task.case.question,
+            task.case.reference_answer,
+            response.parsed.answer,
+            [hit.chunk.text for hit in hits],
+            model=config.provider.judge_model,
+        )
+        metrics.update(
+            {
+                "judge_score": float(judge_response.parsed.score),
+                "judge_pass": float(judge_response.parsed.passed),
+            }
+        )
     result = CaseResult(
         case_id=task.case.id,
         question=task.case.question,
@@ -307,7 +315,15 @@ def _evaluate_task(
         retrieval_hits=hits,
         metrics=metrics,
         usage=response.usage,
-        latency_ms=response.latency_ms,
+        judge=judge_response.parsed if judge_response is not None else None,
+        judge_model=(
+            config.provider.judge_model if judge_response is not None else None
+        ),
+        judge_usage=judge_response.usage if judge_response is not None else None,
+        latency_ms=(
+            response.latency_ms
+            + (judge_response.latency_ms if judge_response is not None else 0)
+        ),
         status="completed",
     )
     return _TaskOutput(result=result)
@@ -371,7 +387,57 @@ def _summary(
             "over_abstention_rate": abstention.over_abstention_rate,
         }
     )
+    judged = [result for result in completed if result.judge is not None]
+    if judged:
+        summary["judge_mean_score"] = _mean(
+            [float(result.judge.score) for result in judged if result.judge is not None]
+        )
+        summary["judge_pass_rate"] = _mean(
+            [float(result.judge.passed) for result in judged if result.judge is not None]
+        )
     return summary
+
+
+def planned_calls(config: ExperimentConfig, case_count: int) -> list[PlannedCall]:
+    """Return every capped provider call included in one experiment plan."""
+
+    calls = [
+        PlannedCall(
+            model=config.provider.chat_model,
+            input_token_cap=GENERATION_INPUT_CAP,
+            output_token_cap=GENERATION_OUTPUT_CAP,
+            count=case_count,
+        )
+    ]
+    if config.provider.judge_model is not None:
+        calls.append(
+            PlannedCall(
+                model=config.provider.judge_model,
+                input_token_cap=JUDGE_INPUT_CAP,
+                output_token_cap=JUDGE_OUTPUT_CAP,
+                count=case_count,
+            )
+        )
+    return calls
+
+
+def _case_planned_calls(config: ExperimentConfig) -> list[PlannedCall]:
+    return planned_calls(config, 1)
+
+
+def _result_call_usages(
+    result: CaseResult, config: ExperimentConfig
+) -> list[tuple[str, TokenUsage]]:
+    if result.usage is None:
+        raise ValueError("live case result requires generation token usage")
+    usages: list[tuple[str, TokenUsage]] = [
+        (config.provider.chat_model, result.usage)
+    ]
+    if config.provider.judge_model is not None:
+        if result.judge_usage is None:
+            raise ValueError("live judged case result requires judge token usage")
+        usages.append((config.provider.judge_model, result.judge_usage))
+    return usages
 
 
 def _experiment_identity(

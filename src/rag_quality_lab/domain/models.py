@@ -119,6 +119,7 @@ class ProviderConfig(BaseModel):
     api_key_env: str
     chat_model: str
     embedding_model: str
+    judge_model: str | None = None
     timeout_seconds: float = Field(default=60, gt=0)
     max_retries: int = Field(default=2, ge=0, le=5)
 
@@ -315,10 +316,23 @@ class CaseResult(BaseModel):
     metrics: dict[str, float] = Field(default_factory=dict)
     usage: TokenUsage | None = None
     judge: JudgeVerdict | None = None
+    judge_model: str | None = None
+    judge_usage: TokenUsage | None = None
     latency_ms: float = Field(default=0, ge=0)
     cost: Decimal = Field(default=Decimal("0"), ge=0)
     status: Literal["completed", "failed", "skipped"]
     error: str | None = None
+
+    @model_validator(mode="after")
+    def validate_judge_metadata(self) -> Self:
+        judge_fields = (self.judge, self.judge_model, self.judge_usage)
+        if any(value is not None for value in judge_fields) and not all(
+            value is not None for value in judge_fields
+        ):
+            raise ValueError(
+                "judge, judge_model, and judge_usage must be provided together"
+            )
+        return self
 
 
 class ExperimentRecord(BaseModel):

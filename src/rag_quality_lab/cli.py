@@ -14,12 +14,13 @@ from rag_quality_lab.domain.models import (
     Answerability,
     EvaluationDataset,
     ExperimentConfig,
+    ExperimentRecord,
     ExperimentStatus,
     PricingConfig,
     StructuredAnswer,
 )
 from rag_quality_lab.experiments import (
-    PlannedCall,
+    ExperimentPreflight,
     ProviderBundle,
     RegressionConfig,
     RegressionFixture,
@@ -28,12 +29,10 @@ from rag_quality_lab.experiments import (
     preflight_budget,
     run_experiment,
 )
-from rag_quality_lab.experiments.runner import (
-    GENERATION_INPUT_CAP,
-    GENERATION_OUTPUT_CAP,
-)
+from rag_quality_lab.experiments.runner import planned_calls
 from rag_quality_lab.experiments.store import ExperimentStore
 from rag_quality_lab.metrics.calibration import (
+    CalibrationResult,
     HumanJudgePair,
     JudgeSample,
     calibrate,
@@ -43,6 +42,7 @@ from rag_quality_lab.metrics.calibration import (
 from rag_quality_lab.providers import (
     FakeChatProvider,
     FakeEmbeddingProvider,
+    FakeJudgeProvider,
     OpenAICompatibleProvider,
 )
 from rag_quality_lab.reporting import generate_reports
@@ -185,8 +185,14 @@ def _handle_report(args: argparse.Namespace) -> int:
     with ExperimentStore(args.database) as store:
         experiment_id = store.resolve_experiment_id(args.experiment)
         record = store.get_experiment(experiment_id)
+        calibration = _calibration_for_record(store, experiment_id, record)
         badge = cast(Literal["mock", "pilot", "final"] | None, args.badge)
-        paths = generate_reports(record, args.output, badge=badge)
+        paths = generate_reports(
+            record,
+            args.output,
+            badge=badge,
+            calibration=calibration,
+        )
         store.record_artifact(
             experiment_id,
             kind="json_report",
@@ -247,14 +253,15 @@ def _handle_annotation_export(args: argparse.Namespace) -> int:
     for result in record.case_results:
         if result.judge is None or result.answer is None:
             continue
+        sample_id = f"{result.case_id}::{result.config_id}"
         samples_by_case.setdefault(
-            result.case_id,
+            sample_id,
             JudgeSample(
-                case_id=result.case_id,
+                case_id=sample_id,
                 question=result.question,
                 reference_answer=result.reference_answer,
                 candidate_answer=result.answer.answer,
-                evidence=result.reference_evidence,
+                evidence=[hit.chunk.text for hit in result.retrieval_hits],
                 model=result.model,
                 config_id=result.config_id,
                 judge_score=result.judge.score,
@@ -285,9 +292,23 @@ def _handle_calibrate(args: argparse.Namespace) -> int:
     with ExperimentStore(args.database) as store:
         experiment_id = store.resolve_experiment_id(args.experiment)
         record = store.get_experiment(experiment_id)
-        annotations = store.get_human_annotations(experiment_id)
+        result = _calibration_for_record(store, experiment_id, record)
+    if result is None:
+        result = calibrate([])
+    _print_json(result.model_dump(mode="json"))
+    return 0
+
+
+def _calibration_for_record(
+    store: ExperimentStore,
+    experiment_id: str,
+    record: ExperimentRecord,
+) -> CalibrationResult | None:
+    annotations = store.get_human_annotations(experiment_id)
+    if not annotations:
+        return None
     judge_by_case = {
-        result.case_id: result.judge.score
+        f"{result.case_id}::{result.config_id}": result.judge.score
         for result in record.case_results
         if result.judge is not None
     }
@@ -298,7 +319,7 @@ def _handle_calibrate(args: argparse.Namespace) -> int:
     )
     if missing:
         raise ValueError(f"human labels have no judge score: {', '.join(missing)}")
-    result = calibrate(
+    return calibrate(
         [
             HumanJudgePair(
                 human_score=annotation.human_score,
@@ -307,8 +328,6 @@ def _handle_calibrate(args: argparse.Namespace) -> int:
             for annotation in annotations
         ]
     )
-    _print_json(result.model_dump(mode="json"))
-    return 0
 
 
 def _provider_bundle(
@@ -326,6 +345,11 @@ def _provider_bundle(
         return ProviderBundle(
             embedding=FakeEmbeddingProvider(_fake_dimensions(config)),
             chat=FakeChatProvider(answers),
+            judge=(
+                FakeJudgeProvider()
+                if config.provider.judge_model is not None
+                else None
+            ),
         )
     chat = OpenAICompatibleProvider(
         base_url=str(config.provider.base_url),
@@ -339,24 +363,33 @@ def _provider_bundle(
         if config.provider.embedding_model.startswith("fake-hash")
         else chat
     )
-    return ProviderBundle(embedding=embedding, chat=chat)
+    return ProviderBundle(
+        embedding=embedding,
+        chat=chat,
+        judge=chat if config.provider.judge_model is not None else None,
+    )
 
 
-def _live_preflight(config: ExperimentConfig, dataset: EvaluationDataset) -> Any:
+def _live_preflight(
+    config: ExperimentConfig, dataset: EvaluationDataset
+) -> ExperimentPreflight:
     if config.pricing_path is None:
         raise ValueError("live experiments require a pricing file")
     pricing = load_yaml_model(config.pricing_path, PricingConfig)
-    return preflight_budget(
-        planned=[
-            PlannedCall(
-                model=config.provider.chat_model,
-                input_token_cap=GENERATION_INPUT_CAP,
-                output_token_cap=GENERATION_OUTPUT_CAP,
-                count=len(dataset.cases) * len(config.retrieval),
-            )
-        ],
+    plan = planned_calls(config, len(dataset.cases) * len(config.retrieval))
+    decision = preflight_budget(
+        planned=plan,
         pricing=pricing,
         budget=config.budget,
+    )
+    return ExperimentPreflight(
+        **decision.model_dump(),
+        planned_calls=plan,
+        total_request_count=sum(call.count for call in plan),
+        pricing_provider=pricing.provider,
+        pricing_verified_at=pricing.verified_at,
+        pricing_source_url=str(pricing.source_url),
+        pricing_rate_basis=pricing.rate_basis,
     )
 
 
