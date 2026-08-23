@@ -133,4 +133,3 @@ rag-quality regression --fixture tests/fixtures/offline_baseline.json
 - Judge 校准是 n=12：96-arm 有区分度，384-arm 偏易定义题；都不能外推为大规模 Judge 可靠性。历史 `544dcc6e` 缺少精确 HTTP 计数；新 final 必须绑定**同一 experiment** 的完整 HTTP 计数与人工校准。
 - SQLite 适合本地单写实验；高吞吐多写场景应迁移到服务型数据库。
 
-
