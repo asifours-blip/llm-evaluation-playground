@@ -92,7 +92,7 @@ Live 运行的安全链条如下：
 
 Judge 辅助模块固定 1–5 分结构化 schema，`score >= 4` 与 `passed=true` 是模型不变量。Pairwise 比较对 A/B 和 B/A 各评一次；若归一化偏好不一致，标为 position-sensitive，不输出赢家。
 
-人工标注导出按可回答性、类别、难度、配置和模型做带种子的轮转分层，物理移除模型、配置、原始 case ID 和 Judge 分数，只保留 opaque sample ID、问题、参考答案、候选答案和 Judge 实际看到的检索证据。SQLite 私下保存 source mapping 与内容哈希，导入时拒绝跨实验或被修改的快照。至少 12 条完整盲标，且 within-one rate ≥ 0.80、MAE ≤ 1.0 时，Judge 才具备回归阻断资格。仓库已有多份 n=12 校准产物；面试须按实验分开讲样本难度，不能把 384-arm 易定义题上的 100% 一致率说成大规模 Judge 可靠性。
+人工标注导出按可回答性、类别、难度、配置和模型做带种子的轮转分层，物理移除模型、配置、原始 case ID 和 Judge 分数，只保留 opaque sample ID、问题、参考答案、候选答案和 Judge 实际看到的检索证据。SQLite 私下保存 source mapping 与内容哈希，导入时拒绝跨实验或被修改的快照。至少 12 条完整盲标，且 within-one rate ≥ 0.80、MAE ≤ 1.0 时，Judge 才具备回归阻断资格。仓库已有多份 n=12 校准产物；解读时须按实验分开看样本难度，不能把 384-arm 易定义题上的 100% 一致率说成大规模 Judge 可靠性。
 
 Pairwise 不是未接线的 helper：CLI 对匹配的 `(case_id, model)` 输出执行 A/B 与 B/A 两次调用，预算、usage、成本、reason 和 position-sensitive 状态进入 SQLite 与规范化 JSON。位置敏感样本不进入胜率分子。`final` badge 同样不是自由输入，只有 live、完成、clean、零失败、逐 case HTTP 计数完整且校准达标的实验才允许生成。
 

@@ -2,7 +2,7 @@
 
 一个本地优先、可复现、预算受控的 RAG 评测平台。它把检索、生成、拒答和系统质量拆开度量，把每次实验的代码版本、数据集哈希、Prompt 哈希、随机种子、配置、成本和逐题结果写入 SQLite，并导出可审计的 JSON/HTML 报告。
 
-这不是“接一个模型就算完成”的问答 Demo。项目的目标是回答三个更难的问题：哪种切片与 `top_k` 组合真的改善了检索；模型何时应该拒答；简历里的每个数字能否追溯到实验产物。
+这不是“接一个模型就算完成”的问答 Demo。项目的目标是回答三个更难的问题：哪种切片与 `top_k` 组合真的改善了检索；模型何时应该拒答；报告中的每个数字能否追溯到实验产物。
 
 ## 已验证状态
 
@@ -95,7 +95,7 @@ Live 实验会分别保存生成与 Judge 的 model、usage 和合并成本。�
 
 ```bash
 rag-quality annotate export --database .ragql/experiments.sqlite3 --experiment latest-live --count 12 --output docs/artifacts/human-annotations.jsonl
-# 由人类在不知道模型、配置和 Judge 分数的情况下填写 human_score
+# 由人工在不知道模型、配置和 Judge 分数的情况下填写 human_score
 rag-quality annotate import --database .ragql/experiments.sqlite3 --experiment latest-live --input docs/artifacts/human-annotations.jsonl
 rag-quality calibrate --database .ragql/experiments.sqlite3 --experiment latest-live
 rag-quality report --database .ragql/experiments.sqlite3 --experiment latest-live --output artifacts/calibrated
@@ -129,7 +129,7 @@ rag-quality regression --fixture tests/fixtures/offline_baseline.json
 
 - 哈希 embedding 故意只作为便宜、可复现的检索弱基线；不能代表生产 embedding。
 - 离线公开产物仍是 Mock，答案分数不可用于比较真实 LLM。Live 数字必须引用对应 final 报告，且检索仍是哈希 embedding 弱基线。
-- 48 题适合回归与面试讲解，不足以形成广泛统计结论。
+- 48 题适合回归与示例讲解，不足以形成广泛统计结论。
 - Judge 校准是 n=12：96-arm 有区分度，384-arm 偏易定义题；都不能外推为大规模 Judge 可靠性。历史 `544dcc6e` 缺少精确 HTTP 计数；新 final 必须绑定**同一 experiment** 的完整 HTTP 计数与人工校准。
 - SQLite 适合本地单写实验；高吞吐多写场景应迁移到服务型数据库。
 
