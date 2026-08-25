@@ -1,8 +1,16 @@
 # RAG Quality Lab
 
+[![CI](https://github.com/asifours-blip/llm-evaluation-playground/actions/workflows/ci.yml/badge.svg)](https://github.com/asifours-blip/llm-evaluation-playground/actions/workflows/ci.yml)
+
+> 仓库名 `llm-evaluation-playground` 为历史链接保留；当前项目名为 **RAG Quality Lab**。
+
 一个本地优先、可复现、预算受控的 RAG 评测平台。它把检索、生成、拒答和系统质量拆开度量，把每次实验的代码版本、数据集哈希、Prompt 哈希、随机种子、配置、成本和逐题结果写入 SQLite，并导出可审计的 JSON/HTML 报告。
 
 这不是“接一个模型就算完成”的问答 Demo。项目的目标是回答三个更难的问题：哪种切片与 `top_k` 组合真的改善了检索；模型何时应该拒答；报告中的每个数字能否追溯到实验产物。
+
+## Repository history
+
+早期提交包含一次本地历史导入；2026-08-21 项目从 LangChain 演示重写为 `rag_quality_lab`。当前行为与质量门禁以 `main` 和 GitHub Actions 为准，不应将早期提交密度理解为线上迭代节奏。
 
 ## 已验证状态
 
@@ -53,8 +61,12 @@ versioned config + dataset + Markdown corpus
 
 ```bash
 python -m venv .venv
+# Linux/macOS
+source .venv/bin/activate
+
 # Windows PowerShell
 .venv\Scripts\Activate.ps1
+
 python -m pip install -e ".[dev]"
 
 python -m rag_quality_lab.cli validate --config configs/offline.yaml
