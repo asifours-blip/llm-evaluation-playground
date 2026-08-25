@@ -16,7 +16,7 @@ M1 离线闭环已完成。当前提交附带一份由 commit `57ae92eb0e8953f8f
 | Recall@k / MRR / context hit | 0.4722 / 0.4740 / 0.4028 | 确定性哈希 embedding 是弱基线，结果没有被包装成高质量检索 |
 | 生成 / 拒答 | 1.0 / 1.0 | Mock 回放参考答案，仅证明指标和拒答链路，不代表真实模型质量 |
 | 成本 | ¥0 | 离线运行不读取 API Key、不发网络请求 |
-| 聚焦逻辑覆盖率 | 95.53% | 领域、配置、指标、预算、回归模块的 branch coverage；网络胶水不靠 mock 数字撑门面 |
+| Focused core branch coverage | 95.53% | `domain`、`config`、`metrics`、`experiments.budget`、`experiments.compare` 的 branch coverage；不是全包覆盖率，网络胶水不靠 mock 数字撑门面 |
 
 可直接检查 [离线 HTML 报告](docs/artifacts/offline-report.html) 和 [规范化 JSON 产物](docs/artifacts/offline-summary.json)。JSON 与 HTML 的 SHA-256 分别为 `d759dd887e65220123e01d52962a48c96374ca0963647efdcf04abf15231c8e5`、`81385f0ec00dcd77de21a0ae2e0b9f9a31f6cff77518ad404f338ad964162c52`。
 
@@ -127,7 +127,7 @@ rag-quality regression --fixture tests/fixtures/offline_baseline.json
 
 ## 局限
 
-- 哈希 embedding 故意只作为便宜、可复现的检索弱基线；不能代表生产 embedding。
+- 哈希 embedding 故意只作为便宜、可复现的检索弱基线；不能代表生产 embedding，也不能把其 answer F1 或 false-answer rate 包装为 RAG 效果优秀。
 - 离线公开产物仍是 Mock，答案分数不可用于比较真实 LLM。Live 数字必须引用对应 final 报告，且检索仍是哈希 embedding 弱基线。
 - 48 题适合回归与示例讲解，不足以形成广泛统计结论。
 - Judge 校准是 n=12：96-arm 有区分度，384-arm 偏易定义题；都不能外推为大规模 Judge 可靠性。历史 `544dcc6e` 缺少精确 HTTP 计数；新 final 必须绑定**同一 experiment** 的完整 HTTP 计数与人工校准。
