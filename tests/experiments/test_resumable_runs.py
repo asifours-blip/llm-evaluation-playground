@@ -12,6 +12,7 @@ import json
 import subprocess
 import sys
 import threading
+from datetime import date, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -101,6 +102,7 @@ def resume(
     *,
     retry_unknown: bool = False,
     generation_completion_tokens: int = 20,
+    on_date: date | None = None,
 ) -> ExperimentRecord:
     session = LoggedSession(log, generation_completion_tokens=generation_completion_tokens)
     return resume_experiment(
@@ -109,6 +111,7 @@ def resume(
         remote_bundle(session, max_retries=config.provider.max_retries),
         load_dataset(config.dataset_path),
         retry_unknown=retry_unknown,
+        on_date=on_date,
     )
 
 
@@ -356,6 +359,28 @@ def test_resume_refuses_changed_dataset_corpus_config_or_pricing(tmp_path: Path)
     assert len(read_log(log)) == request_count
     assert status(config, experiment_id) is ExperimentStatus.INTERRUPTED
     config.pricing_path.write_text(original_pricing, encoding="utf-8")
+    assert resume(config, experiment_id, log).status is ExperimentStatus.COMPLETED
+
+
+def test_resume_refuses_pricing_that_is_stale_on_the_resume_date(
+    tmp_path: Path,
+) -> None:
+    verified_at = date.today() - timedelta(days=7)
+    config, experiment_id, log = interrupt(
+        tmp_path, "--block-after-results", "1", verified_at=verified_at
+    )
+    request_count = len(read_log(log))
+
+    with pytest.raises(ResumeRefused) as refused:
+        resume(config, experiment_id, log, on_date=date.today() + timedelta(days=1))
+
+    message = str(refused.value)
+    assert verified_at.isoformat() in message
+    assert "7 days" in message
+    assert "frozen in the experiment identity" in message
+    assert "new experiment" in message
+    assert len(read_log(log)) == request_count
+    assert status(config, experiment_id) is ExperimentStatus.INTERRUPTED
     assert resume(config, experiment_id, log).status is ExperimentStatus.COMPLETED
 
 

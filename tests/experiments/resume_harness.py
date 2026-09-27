@@ -91,6 +91,7 @@ def write_inputs(
     preflight_fraction: str = "0.90",
     safety_multiplier: str = "1.25",
     max_retries: int = 1,
+    verified_at: date | None = None,
 ) -> Path:
     """Write corpus, dataset, pricing, and a live config; return the config path."""
 
@@ -109,7 +110,7 @@ def write_inputs(
             {
                 "provider": "local-test",
                 "currency": "CNY",
-                "verified_at": date.today().isoformat(),
+                "verified_at": (verified_at or date.today()).isoformat(),
                 "source_url": "https://example.com/pricing",
                 "models": prices or default_prices(),
             }

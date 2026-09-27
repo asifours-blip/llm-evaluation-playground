@@ -14,6 +14,8 @@ from rag_quality_lab.domain.models import (
 )
 
 TOKENS_PER_MILLION = Decimal("1000000")
+# A pricing file older than this on the day spend is authorized is stale.
+MAX_PRICING_AGE_DAYS = 7
 
 
 class PlannedCall(BaseModel):
@@ -76,7 +78,7 @@ def preflight_budget(
     pricing: PricingConfig,
     budget: BudgetConfig,
     on_date: date | None = None,
-    max_pricing_age_days: int = 7,
+    max_pricing_age_days: int = MAX_PRICING_AGE_DAYS,
     spent: Decimal = Decimal("0"),
 ) -> PreflightDecision:
     """Decide whether the complete buffered plan fits the configured threshold.

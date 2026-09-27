@@ -11,6 +11,7 @@ from collections.abc import Callable, Iterator, Sequence
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from contextlib import ExitStack
 from dataclasses import dataclass, field
+from datetime import date
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, Literal
@@ -39,6 +40,7 @@ from rag_quality_lab.domain.models import (
     TokenUsage,
 )
 from rag_quality_lab.experiments.budget import (
+    MAX_PRICING_AGE_DAYS,
     BudgetExceeded,
     BudgetLedger,
     PlannedCall,
@@ -374,6 +376,7 @@ def resume_experiment(
     dataset: EvaluationDataset,
     *,
     retry_unknown: bool = False,
+    on_date: date | None = None,
 ) -> ExperimentRecord:
     """Continue an INTERRUPTED experiment from its persisted checkpoint.
 
@@ -383,7 +386,9 @@ def resume_experiment(
     settled are charged at their reservation and skipped unless
     ``retry_unknown`` is set, in which case they run again and are charged
     again. The budget ledger continues from the persisted spend, and the
-    remaining plan must pass preflight against the unspent budget.
+    remaining plan must pass preflight against the unspent budget. Because
+    resuming spends money again, the frozen pricing must still be fresh on
+    ``on_date`` (default: today).
     """
 
     _validate_providers(config, providers)
@@ -424,6 +429,15 @@ def resume_experiment(
         if config.mode == "live" and remaining:
             if pricing is None:
                 raise ValueError("live experiments require a pricing file")
+            evaluation_date = on_date or date.today()
+            if pricing.is_stale(evaluation_date, max_age_days=MAX_PRICING_AGE_DAYS):
+                raise ResumeRefused(
+                    f"cannot resume experiment {experiment_id}: its pricing snapshot "
+                    f"was verified on {pricing.verified_at.isoformat()} and is older "
+                    f"than the {MAX_PRICING_AGE_DAYS} days pricing stays valid on "
+                    f"{evaluation_date.isoformat()}; pricing is frozen in the experiment "
+                    "identity, so start a new experiment to use new pricing"
+                )
             spent = store.ledger_spent(experiment_id)
             plan = _live_plan(
                 config,
@@ -437,7 +451,7 @@ def resume_experiment(
                 planned=plan.calls(),
                 pricing=pricing,
                 budget=config.budget,
-                on_date=store.created_at(experiment_id).date(),
+                on_date=evaluation_date,
                 spent=spent,
             )
             if not decision.allowed:
