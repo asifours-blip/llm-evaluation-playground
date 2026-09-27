@@ -396,10 +396,10 @@ def test_resume_cancel_and_status_commands_respect_terminal_states(
         "experiment_id"
     ]
 
-    resumed = run_cli("resume", experiment_id, "--config", str(config))
-    cancelled = run_cli("cancel", experiment_id, "--database", database)
+    resumed = run_cli("resume", "--experiment", experiment_id, "--config", str(config))
+    cancelled = run_cli("cancel", "--experiment", experiment_id, "--database", database)
     listed = run_cli("status", "--database", database)
-    detail = run_cli("status", experiment_id, "--database", database)
+    detail = run_cli("status", "--experiment", experiment_id, "--database", database)
 
     assert resumed.returncode == 2
     assert "status is completed" in resumed.stderr
@@ -413,12 +413,14 @@ def test_resume_cancel_and_status_commands_respect_terminal_states(
     assert payload["status"] == "completed"
     assert payload["progress"] == {"done": 1, "total": 1, "unknown": 0}
     assert payload["spent"] == "0"
+    positional = run_cli("status", experiment_id, "--database", database)
+    assert positional.returncode == 2
 
 
 def test_live_resume_requires_explicit_confirmation(tmp_path: Path) -> None:
     config = write_cli_fixture(tmp_path, mode="live")
 
-    result = run_cli("resume", "missing-id", "--config", str(config))
+    result = run_cli("resume", "--experiment", "missing-id", "--config", str(config))
 
     assert result.returncode == 2
     assert "--confirm-live-run" in result.stderr

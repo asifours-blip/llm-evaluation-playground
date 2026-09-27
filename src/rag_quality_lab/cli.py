@@ -84,7 +84,7 @@ def build_parser() -> argparse.ArgumentParser:
     resume = subcommands.add_parser(
         "resume", help="resume an interrupted experiment from its checkpoint"
     )
-    resume.add_argument("experiment_id")
+    resume.add_argument("--experiment", required=True)
     resume.add_argument("--config", required=True, type=Path)
     resume.add_argument("--artifact-dir", type=Path)
     resume.add_argument("--confirm-live-run", action="store_true")
@@ -98,14 +98,14 @@ def build_parser() -> argparse.ArgumentParser:
     cancel = subcommands.add_parser(
         "cancel", help="stop an experiment from claiming further cases"
     )
-    cancel.add_argument("experiment_id")
+    cancel.add_argument("--experiment", required=True)
     cancel.add_argument("--database", required=True, type=Path)
     cancel.set_defaults(handler=_handle_cancel)
 
     status = subcommands.add_parser(
         "status", help="show lifecycle, progress, and spend of stored experiments"
     )
-    status.add_argument("experiment_id", nargs="?")
+    status.add_argument("--experiment")
     status.add_argument("--database", required=True, type=Path)
     status.set_defaults(handler=_handle_status)
 
@@ -224,7 +224,7 @@ def _handle_resume(args: argparse.Namespace) -> int:
         raise ValueError("live resumes require --confirm-live-run")
     dataset = load_dataset(config.dataset_path)
     with ExperimentStore(config.database_path) as store:
-        experiment_id = store.resolve_experiment_id(args.experiment_id)
+        experiment_id = store.resolve_experiment_id(args.experiment)
     record = resume_experiment(
         experiment_id,
         config,
@@ -237,7 +237,7 @@ def _handle_resume(args: argparse.Namespace) -> int:
 
 def _handle_cancel(args: argparse.Namespace) -> int:
     with ExperimentStore(args.database) as store:
-        experiment_id = store.resolve_experiment_id(args.experiment_id)
+        experiment_id = store.resolve_experiment_id(args.experiment)
         status = store.request_cancel(experiment_id)
     _print_json(
         {
@@ -252,8 +252,8 @@ def _handle_cancel(args: argparse.Namespace) -> int:
 def _handle_status(args: argparse.Namespace) -> int:
     with ExperimentStore(args.database) as store:
         store.reap_orphans()
-        if args.experiment_id is not None:
-            payload = store.progress(store.resolve_experiment_id(args.experiment_id))
+        if args.experiment is not None:
+            payload = store.progress(store.resolve_experiment_id(args.experiment))
         else:
             payload = {
                 "experiments": [

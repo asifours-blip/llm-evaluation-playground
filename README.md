@@ -108,10 +108,10 @@ rag-quality run --config configs/live-deepseek.example.yaml --confirm-live-run
 实验记录冻结配置、数据集哈希、语料哈希、prompt 版本和定价快照；每个 case-arm 的预算预留写入 SQLite `ledger_entries`，请求发出前先标记为 dispatched，结果、embedding 记录和结算在同一事务中落库。进程被杀后，下次 `run`/`resume`/`status`/`cancel` 按「主机 + PID + 进程启动时间」识别失去属主的 RUNNING 实验（跨主机时退化为心跳租约超时），将其置为 INTERRUPTED：未发出的预留释放，已发出未结算的调用按预留上限计入并标记为 unknown。
 
 ```powershell
-rag-quality status EXPERIMENT_ID --database .ragql/experiments.sqlite3
-rag-quality resume EXPERIMENT_ID --config configs/live-deepseek.example.yaml --confirm-live-run
-rag-quality resume EXPERIMENT_ID --config configs/live-deepseek.example.yaml --confirm-live-run --retry-unknown
-rag-quality cancel EXPERIMENT_ID --database .ragql/experiments.sqlite3
+rag-quality status --database .ragql/experiments.sqlite3 --experiment EXPERIMENT_ID
+rag-quality resume --config configs/live-deepseek.example.yaml --experiment EXPERIMENT_ID --confirm-live-run
+rag-quality resume --config configs/live-deepseek.example.yaml --experiment EXPERIMENT_ID --confirm-live-run --retry-unknown
+rag-quality cancel --database .ragql/experiments.sqlite3 --experiment EXPERIMENT_ID
 ```
 
 `resume` 只接受 INTERRUPTED 实验；输入与冻结身份不一致时列出变化项并拒绝。已落库的 case-arm 不再请求；unknown 的 case-arm 默认不重发，`--retry-unknown` 重发并另计费用。账本从已花费金额继续，剩余计划须通过「剩余预算」预检，否则拒绝且状态不变。`cancel` 让执行器在领取下一个 case-arm 前停止，进行中的 case-arm 照常结算；对 INTERRUPTED 实验直接置为 CANCELLED。数据库带 `user_version` 版本号：阶段 1 的旧文件打开时自动迁移，更新版本的文件会明确报错。
