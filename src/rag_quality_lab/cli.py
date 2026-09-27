@@ -39,7 +39,7 @@ from rag_quality_lab.experiments import (
     run_experiment,
     run_pairwise_comparison,
 )
-from rag_quality_lab.experiments.runner import planned_calls
+from rag_quality_lab.experiments.runner import planned_calls, resume_experiment
 from rag_quality_lab.experiments.store import ExperimentStore
 from rag_quality_lab.metrics.calibration import (
     AnnotationSnapshot,
@@ -80,6 +80,34 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--confirm-live-run", action="store_true")
     run.add_argument("--preflight-only", action="store_true")
     run.set_defaults(handler=_handle_run)
+
+    resume = subcommands.add_parser(
+        "resume", help="resume an interrupted experiment from its checkpoint"
+    )
+    resume.add_argument("experiment_id")
+    resume.add_argument("--config", required=True, type=Path)
+    resume.add_argument("--artifact-dir", type=Path)
+    resume.add_argument("--confirm-live-run", action="store_true")
+    resume.add_argument(
+        "--retry-unknown",
+        action="store_true",
+        help="re-send case arms whose outcome is unknown; they are charged again",
+    )
+    resume.set_defaults(handler=_handle_resume)
+
+    cancel = subcommands.add_parser(
+        "cancel", help="stop an experiment from claiming further cases"
+    )
+    cancel.add_argument("experiment_id")
+    cancel.add_argument("--database", required=True, type=Path)
+    cancel.set_defaults(handler=_handle_cancel)
+
+    status = subcommands.add_parser(
+        "status", help="show lifecycle, progress, and spend of stored experiments"
+    )
+    status.add_argument("experiment_id", nargs="?")
+    status.add_argument("--database", required=True, type=Path)
+    status.set_defaults(handler=_handle_status)
 
     report = subcommands.add_parser("report", help="regenerate a stored report")
     report.add_argument("--database", required=True, type=Path)
@@ -185,6 +213,59 @@ def _handle_run(args: argparse.Namespace) -> int:
         raise ValueError("--preflight-only is only valid for live configurations")
 
     record = run_experiment(config, _provider_bundle(config, dataset), dataset)
+    return _publish_run(config, record)
+
+
+def _handle_resume(args: argparse.Namespace) -> int:
+    config = load_experiment_config(args.config)
+    if args.artifact_dir is not None:
+        config = config.model_copy(update={"artifact_dir": args.artifact_dir})
+    if config.mode == "live" and not args.confirm_live_run:
+        raise ValueError("live resumes require --confirm-live-run")
+    dataset = load_dataset(config.dataset_path)
+    with ExperimentStore(config.database_path) as store:
+        experiment_id = store.resolve_experiment_id(args.experiment_id)
+    record = resume_experiment(
+        experiment_id,
+        config,
+        _provider_bundle(config, dataset),
+        dataset,
+        retry_unknown=args.retry_unknown,
+    )
+    return _publish_run(config, record)
+
+
+def _handle_cancel(args: argparse.Namespace) -> int:
+    with ExperimentStore(args.database) as store:
+        experiment_id = store.resolve_experiment_id(args.experiment_id)
+        status = store.request_cancel(experiment_id)
+    _print_json(
+        {
+            "experiment_id": experiment_id,
+            "status": status.value,
+            "cancel_requested": True,
+        }
+    )
+    return 0
+
+
+def _handle_status(args: argparse.Namespace) -> int:
+    with ExperimentStore(args.database) as store:
+        store.reap_orphans()
+        if args.experiment_id is not None:
+            payload = store.progress(store.resolve_experiment_id(args.experiment_id))
+        else:
+            payload = {
+                "experiments": [
+                    store.progress(experiment_id)
+                    for experiment_id in store.experiment_ids()
+                ]
+            }
+    _print_json(payload)
+    return 0
+
+
+def _publish_run(config: ExperimentConfig, record: ExperimentRecord) -> int:
     paths = generate_reports(record, config.artifact_dir)
     with ExperimentStore(config.database_path) as store:
         store.record_artifact(
@@ -199,15 +280,18 @@ def _handle_run(args: argparse.Namespace) -> int:
             path=str(paths.html),
             sha256=paths.html_sha256,
         )
-    _print_json(
-        {
-            "experiment_id": record.id,
-            "status": record.status.value,
-            "report_json": str(paths.json.resolve()),
-            "report_html": str(paths.html.resolve()),
-            "summary": record.summary,
-        }
-    )
+    payload: dict[str, object] = {
+        "experiment_id": record.id,
+        "status": record.status.value,
+        "report_json": str(paths.json.resolve()),
+        "report_html": str(paths.html.resolve()),
+        "summary": record.summary,
+    }
+    if record.unknown_calls:
+        payload["unknown_outcome_task_keys"] = sorted(
+            {call.task_key for call in record.unknown_calls}
+        )
+    _print_json(payload)
     return 0 if record.status is ExperimentStatus.COMPLETED else 1
 
 

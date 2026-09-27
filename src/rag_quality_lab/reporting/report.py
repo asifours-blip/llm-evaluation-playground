@@ -130,6 +130,12 @@ def _report_payload(
         payload["embedding_calls"] = [
             call.model_dump(mode="json") for call in experiment.embedding_calls
         ]
+    if experiment.unknown_calls:
+        # Additive key: calls sent before an interruption but never settled,
+        # charged at their reserved cap.
+        payload["unknown_calls"] = [
+            call.model_dump(mode="json") for call in experiment.unknown_calls
+        ]
     return payload
 
 

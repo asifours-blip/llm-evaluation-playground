@@ -278,3 +278,13 @@ def test_preflight_after_resume_compares_the_plan_with_the_unspent_budget() -> N
     assert not resumed.allowed
     assert resumed.threshold == Decimal("0.20")
     assert "remaining" in resumed.reason
+
+
+def test_preflight_rejects_negative_persisted_spend() -> None:
+    with pytest.raises(ValueError, match="spent"):
+        preflight_budget(
+            planned=[PlannedCall(model="pro", input_token_cap=10, output_token_cap=0)],
+            pricing=pricing(),
+            budget=BudgetConfig(hard_limit=Decimal("1.00")),
+            spent=Decimal("-1"),
+        )
