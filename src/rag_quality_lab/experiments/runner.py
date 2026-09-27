@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import hashlib
 import importlib.metadata
-import json
 import platform
 import subprocess
 from collections.abc import Callable, Iterator, Sequence
@@ -14,8 +12,14 @@ from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
-from typing import Any, Literal
+from typing import Literal
 
+from rag_quality_lab.config.holdout import (
+    HoldoutStatus,
+    holdout_lock_path,
+    load_holdout_lock,
+    verify_holdout,
+)
 from rag_quality_lab.config.loaders import load_yaml_model, validate_dataset_corpus
 from rag_quality_lab.domain.models import (
     Answerability,
@@ -38,6 +42,7 @@ from rag_quality_lab.domain.models import (
     RetrievalHit,
     StructuredAnswer,
     TokenUsage,
+    canonical_hash,
 )
 from rag_quality_lab.experiments.budget import (
     MAX_PRICING_AGE_DAYS,
@@ -48,6 +53,7 @@ from rag_quality_lab.experiments.budget import (
     estimate_tokens_upper_bound,
     preflight_budget,
 )
+from rag_quality_lab.experiments.compare import canonical_config, diff_paths
 from rag_quality_lab.experiments.liveness import LeaseHeartbeat
 from rag_quality_lab.experiments.store import (
     DispatchJournal,
@@ -88,7 +94,10 @@ from rag_quality_lab.providers.openai_compatible import (
     JUDGE_OUTPUT_TOKEN_CAP,
     REPAIR_PROMPT_TOKEN_ALLOWANCE,
     ProviderError,
+    embedding_text_token_bound,
+    split_embedding_batches,
 )
+from rag_quality_lab.retrieval.bm25 import BM25Index
 from rag_quality_lab.retrieval.index import (
     InMemoryIndex,
     chunk_document,
@@ -98,6 +107,7 @@ from rag_quality_lab.retrieval.index import (
 )
 
 FailurePhase = Literal["retrieval", "generation", "metrics", "judge"]
+Retriever = InMemoryIndex | BM25Index
 StopReason = Literal["budget", "cancelled"] | None
 DispatchMarker = Callable[[str], None]
 GENERATION_PHASE = "generation_with_repair"
@@ -136,7 +146,7 @@ class _Task:
     case: EvaluationCase
     retrieval: RetrievalConfig
     config_id: str
-    index: InMemoryIndex
+    index: Retriever
     instructions: str
 
 
@@ -150,50 +160,90 @@ class _EmbeddingOutcome:
     response: EmbeddingResponse | None = None
     error: Exception | None = None
     dispatched: bool = True
+    batch_index: int = 0
+    batch_count: int = 1
+
+    @property
+    def key(self) -> str:
+        return _batch_key(self.phase, self.batch_index)
 
 
 @dataclass(frozen=True)
-class _EmbeddingCaps:
-    """Per-request token upper bounds reserved for each case's live embeddings."""
+class _PhaseBatches:
+    """Planned request batches of one per-case embedding phase.
 
-    query: int
-    answer: int
+    ``ranges`` split the phase's texts into requests and ``caps`` are the
+    reserved token upper bounds of each request. They are derived from the
+    planned per-text bounds, not the actual texts, so the number of requests a
+    case sends always equals the number planned and reserved.
+    """
+
+    phase: EmbeddingPhase
+    ranges: tuple[range, ...]
+    caps: tuple[int, ...]
+
+    @classmethod
+    def plan(
+        cls, phase: EmbeddingPhase, bounds: Sequence[int], config: ExperimentConfig
+    ) -> _PhaseBatches:
+        ranges = split_embedding_batches(
+            bounds,
+            max_inputs=config.provider.embedding_batch_size,
+            max_tokens=config.provider.embedding_batch_token_limit,
+        )
+        return cls(
+            phase=phase,
+            ranges=tuple(ranges),
+            caps=tuple(sum(bounds[index] for index in batch) for batch in ranges),
+        )
+
+
+@dataclass(frozen=True)
+class _CaseBatches:
+    """Planned embedding batches of every live case arm."""
+
+    query: _PhaseBatches
+    answer: _PhaseBatches
 
 
 @dataclass(frozen=True)
 class _LivePlan:
-    """Structured live call plan shared by preflight and per-case reservations."""
+    """Structured live call plan shared by preflight and per-case reservations.
+
+    Remote embedding phases hold one planned call per request batch, keyed
+    ``phase`` for the first batch and ``phase#N`` for later ones.
+    """
 
     generation: PlannedCall
     judge: PlannedCall | None
-    index_embeddings: dict[str, PlannedCall]
-    query_embedding: PlannedCall | None
-    answer_embedding: PlannedCall | None
-    embedding_caps: _EmbeddingCaps | None
+    index_embeddings: dict[str, list[PlannedCall]]
+    query_embedding: list[PlannedCall]
+    answer_embedding: list[PlannedCall]
+    case_batches: _CaseBatches | None
 
     def calls(self) -> list[PlannedCall]:
         calls = [self.generation]
         if self.judge is not None:
             calls.append(self.judge)
-        calls.extend(self.index_embeddings.values())
-        for call in (self.query_embedding, self.answer_embedding):
-            if call is not None:
-                calls.append(call)
+        for batches in self.index_embeddings.values():
+            calls.extend(batches)
+        calls.extend(self.query_embedding)
+        calls.extend(self.answer_embedding)
         return calls
 
-    def case_calls(self) -> dict[str, PlannedCall]:
-        """Return the calls reserved atomically before one case is scheduled."""
+    def case_calls(self, retriever: str) -> dict[str, PlannedCall]:
+        """Return the calls reserved atomically before one case is scheduled.
 
-        return {
-            call.phase: call.model_copy(update={"count": 1})
-            for call in (
-                self.generation,
-                self.judge,
-                self.query_embedding,
-                self.answer_embedding,
-            )
-            if call is not None
-        }
+        A BM25 arm embeds no query, so it reserves no query batches.
+        """
+
+        calls = [self.generation]
+        if self.judge is not None:
+            calls.append(self.judge)
+        if retriever == "embedding":
+            calls.extend(self.query_embedding)
+        calls.extend(self.answer_embedding)
+        return {call.phase: call.model_copy(update={"count": 1}) for call in calls}
 
 
 @dataclass(frozen=True)
@@ -238,11 +288,11 @@ class _Session:
 
 
 class _EmbeddingCallError(RuntimeError):
-    """An embedding failure carrying the observed request outcome."""
+    """An embedding failure carrying every observed request batch outcome."""
 
-    def __init__(self, outcome: _EmbeddingOutcome, cause: Exception) -> None:
+    def __init__(self, outcomes: Sequence[_EmbeddingOutcome], cause: Exception) -> None:
         super().__init__(str(cause))
-        self.outcome = outcome
+        self.outcomes = list(outcomes)
         self.cause = cause
 
 
@@ -271,35 +321,44 @@ class _TaskFailure(RuntimeError):
 
 
 class _RecordingEmbeddingProvider:
-    """Meter index-build embedding requests and refuse unplanned input."""
+    """Meter index-build embedding batches and refuse unplanned input."""
 
     def __init__(
         self,
         inner: EmbeddingProvider,
         *,
-        token_cap: int,
+        planned: Sequence[PlannedCall],
+        config: ExperimentConfig,
         mark: DispatchMarker | None = None,
     ) -> None:
         self.inner = inner
-        self.token_cap = token_cap
+        self.planned = list(planned)
+        self.config = config
         self.mark = mark
         self.cache_identity = embedding_cache_identity(inner)
-        self.outcome: _EmbeddingOutcome | None = None
+        self.outcomes: list[_EmbeddingOutcome] = []
 
     def embed(
         self, texts: Sequence[str], *, model: str | None = None
     ) -> list[list[float]]:
+        bounds = [embedding_text_token_bound(text) for text in texts]
+        planned = _PhaseBatches.plan("embedding_index", bounds, self.config)
+        if len(planned.ranges) != len(self.planned):
+            raise ValueError(
+                f"index embedding needs {len(planned.ranges)} batches but "
+                f"{len(self.planned)} were planned"
+            )
+        batches = _PhaseBatches(
+            phase="embedding_index",
+            ranges=planned.ranges,
+            caps=tuple(_per_request_token_bound(call) for call in self.planned),
+        )
         try:
-            vectors, self.outcome = _observed_embed(
-                self.inner,
-                texts,
-                model=model,
-                phase="embedding_index",
-                token_cap=self.token_cap,
-                mark=self.mark,
+            vectors, self.outcomes = _observed_embed_batches(
+                self.inner, texts, model=model, batches=batches, mark=self.mark
             )
         except _EmbeddingCallError as error:
-            self.outcome = error.outcome
+            self.outcomes = error.outcomes
             raise error.cause from error
         return vectors
 
@@ -321,9 +380,13 @@ def run_experiment(
     _validate_providers(config, providers)
     documents = load_documents(config.knowledge_base_path)
     validate_dataset_corpus(dataset, documents)
+    holdout = _verified_holdout(config, dataset)
     prompt_engine = PromptEngine()
     pricing = _load_pricing(config)
-    identity = _experiment_identity(config, dataset, prompt_engine, documents, pricing)
+    identity = _experiment_identity(
+        config, dataset, prompt_engine, documents, pricing, holdout
+    )
+    dataset = dataset.select_splits(config.splits)
 
     with ExperimentStore(config.database_path) as store:
         store.reap_orphans()
@@ -394,9 +457,13 @@ def resume_experiment(
     _validate_providers(config, providers)
     documents = load_documents(config.knowledge_base_path)
     validate_dataset_corpus(dataset, documents)
+    holdout = _verified_holdout(config, dataset)
     prompt_engine = PromptEngine()
     pricing = _load_pricing(config)
-    current = _experiment_identity(config, dataset, prompt_engine, documents, pricing)
+    current = _experiment_identity(
+        config, dataset, prompt_engine, documents, pricing, holdout
+    )
+    dataset = dataset.select_splits(config.splits)
 
     with ExperimentStore(config.database_path) as store:
         store.reap_orphans()
@@ -444,8 +511,7 @@ def resume_experiment(
                 dataset,
                 documents,
                 providers.embedding,
-                task_count=len(remaining),
-                arms=arms,
+                remaining=remaining,
             )
             decision = preflight_budget(
                 planned=plan.calls(),
@@ -520,10 +586,17 @@ def identity_changes(
         or frozen.prompt_hashes != current.prompt_hashes
     ):
         changes.append("prompt version or templates (prompt_hashes)")
-    changes.extend(f"config.{path}" for path in _diff_paths(frozen.config, current.config))
+    # Stored configs are re-validated so fields added later take their
+    # defaults instead of reading as changes.
+    changes.extend(
+        f"config.{path}"
+        for path in diff_paths(
+            canonical_config(frozen.config), canonical_config(current.config)
+        )
+    )
     changes.extend(
         f"pricing.{path}" if path else "pricing"
-        for path in _diff_paths(frozen.pricing_snapshot, current.pricing_snapshot)
+        for path in diff_paths(frozen.pricing_snapshot, current.pricing_snapshot)
     )
     return changes
 
@@ -558,6 +631,8 @@ def _refuse_unknown_index_rebuild(
         return
     for retrieval in config.retrieval:
         config_id = _config_id(retrieval)
+        if retrieval.retriever != "embedding":
+            continue
         if config_id not in arms or _index_task_key(config_id) not in unknown:
             continue
         if uncached_chunks(
@@ -573,23 +648,10 @@ def _refuse_unknown_index_rebuild(
             )
 
 
-def _diff_paths(left: Any, right: Any, prefix: str = "") -> list[str]:
-    if isinstance(left, dict) and isinstance(right, dict):
-        paths: list[str] = []
-        for key in sorted(set(left) | set(right), key=str):
-            path = f"{prefix}.{key}" if prefix else str(key)
-            if key not in left or key not in right:
-                paths.append(path)
-            else:
-                paths.extend(_diff_paths(left[key], right[key], path))
-        return paths
-    if isinstance(left, list) and isinstance(right, list) and len(left) == len(right):
-        return [
-            path
-            for index, (left_item, right_item) in enumerate(zip(left, right, strict=True))
-            for path in _diff_paths(left_item, right_item, f"{prefix}[{index}]")
-        ]
-    return [] if left == right else [prefix]
+def _verified_holdout(config: ExperimentConfig, dataset: EvaluationDataset) -> HoldoutStatus:
+    """Refuse a dataset whose frozen holdout changed without a new version."""
+
+    return verify_holdout(dataset, load_holdout_lock(holdout_lock_path(config.dataset_path)))
 
 
 def _validate_providers(config: ExperimentConfig, providers: ProviderBundle) -> None:
@@ -604,6 +666,15 @@ def _validate_providers(config: ExperimentConfig, providers: ProviderBundle) -> 
             f"embedding model {config.provider.embedding_model} is planned as a local "
             "embedding, but the embedding provider is not local"
         )
+    for setting in ("embedding_batch_size", "embedding_batch_token_limit"):
+        provider_value = getattr(providers.embedding, setting, None)
+        if provider_value is not None and provider_value != getattr(config.provider, setting):
+            # The runner plans and reserves batches from the configuration, so
+            # a provider that splits differently would send unplanned requests.
+            raise ValueError(
+                f"embedding provider {setting}={provider_value} differs from "
+                f"provider.{setting}={getattr(config.provider, setting)}"
+            )
 
 
 def _load_pricing(config: ExperimentConfig) -> PricingConfig | None:
@@ -702,62 +773,67 @@ def _prepare_live_budget(
     return BudgetLedger(budget=config.budget, pricing=pricing), plan
 
 
-def _build_indexes(
-    session: _Session, arms: set[str]
-) -> dict[str, InMemoryIndex] | None:
+def _build_indexes(session: _Session, arms: set[str]) -> dict[str, Retriever] | None:
     """Build the indexes of ``arms``; return None when the budget cannot cover it.
 
-    Chunks whose cache entry matches provider, model, text, and chunking are
-    never embedded again, so a resumed run reuses a verified cached index.
+    BM25 arms build a local lexical index and never call the embedding
+    provider. Dense chunks whose cache entry matches provider, model, text,
+    and chunking are never embedded again, so a resumed run reuses a verified
+    cached index. Each planned index batch is reserved, journaled as sent, and
+    settled on its own: sent batches are charged even when a later one fails,
+    and batches never sent are released.
     """
 
     config = session.config
     ledger = session.ledger
     plan = session.plan
     model = config.provider.embedding_model
-    metered = ledger is not None and plan is not None and plan.embedding_caps is not None
-    index_reservations: dict[str, Decimal] = {}
-    entry_ids: dict[str, int] = {}
+    metered = ledger is not None and plan is not None and plan.case_batches is not None
+    index_reservations: dict[str, dict[str, Decimal]] = {}
+    entry_ids: dict[str, dict[str, int]] = {}
     if metered and ledger is not None and plan is not None and plan.index_embeddings:
         config_ids = [config_id for config_id in plan.index_embeddings if config_id in arms]
+        planned_batches = [
+            call for config_id in config_ids for call in plan.index_embeddings[config_id]
+        ]
         try:
-            reserved = ledger.reserve_many(
-                [plan.index_embeddings[config_id] for config_id in config_ids]
-            )
+            reserved = iter(ledger.reserve_many(planned_batches))
         except BudgetExceeded:
             return None
-        index_reservations = dict(zip(config_ids, reserved, strict=True))
-        for config_id, amount in index_reservations.items():
+        for config_id in config_ids:
+            index_reservations[config_id] = {
+                call.phase: next(reserved) for call in plan.index_embeddings[config_id]
+            }
             entry_ids[config_id] = session.store.reserve_entries(
                 session.experiment_id,
                 task_key=_index_task_key(config_id),
                 config_id=config_id,
                 case_id=None,
-                reservations={"embedding_index": amount},
-            )["embedding_index"]
+                reservations=index_reservations[config_id],
+            )
 
-    indexes: dict[str, InMemoryIndex] = {}
+    indexes: dict[str, Retriever] = {}
     for retrieval in config.retrieval:
         config_id = _config_id(retrieval)
         if config_id not in arms:
             continue
         chunks = _arm_chunks(session.documents, retrieval)
+        if retrieval.retriever == "bm25":
+            indexes[config_id] = BM25Index.from_chunks(chunks)
+            continue
         cache_path = _embedding_cache_path(config, config_id)
         if not metered or plan is None:
             indexes[config_id] = InMemoryIndex.from_chunks(
                 chunks, session.providers.embedding, model=model, cache_path=cache_path
             )
             continue
-        planned = plan.index_embeddings.get(config_id)
-        entry_id = entry_ids.get(config_id)
+        arm_entries = entry_ids.get(config_id, {})
         recorder = _RecordingEmbeddingProvider(
             session.providers.embedding,
-            token_cap=_per_request_token_bound(planned) if planned is not None else 0,
+            planned=plan.index_embeddings.get(config_id, []),
+            config=config,
             mark=_dispatch_gate(
-                session.journal,
-                session.experiment_id,
-                {"embedding_index": entry_id} if entry_id is not None else {},
-                check_cancel=False,
+                session.journal, session.experiment_id, arm_entries, check_cancel=False
             ),
         )
         try:
@@ -765,24 +841,25 @@ def _build_indexes(
                 chunks, recorder, model=model, cache_path=cache_path
             )
         finally:
-            reservation = index_reservations.pop(config_id, None)
-            if recorder.outcome is not None:
+            reservations = index_reservations.pop(config_id, {})
+            for outcome in recorder.outcomes:
                 record, _ = _settle_embedding(
-                    recorder.outcome,
-                    reservation=reservation,
+                    outcome,
+                    reservation=reservations.pop(outcome.key, None),
                     ledger=ledger,
                     pricing=session.pricing,
                     model=model,
                     config_id=config_id,
                     case_id=None,
                 )
+                entry_id = arm_entries.get(outcome.key)
                 session.store.commit_embedding_outcome(
                     session.experiment_id,
                     record,
                     (
                         {
                             entry_id: (
-                                "settled" if recorder.outcome.dispatched else "released",
+                                "settled" if outcome.dispatched else "released",
                                 record.cost,
                             )
                         }
@@ -790,12 +867,17 @@ def _build_indexes(
                         else {}
                     ),
                 )
-            elif reservation is not None and ledger is not None:
-                ledger.release_reserved([reservation])
-                if entry_id is not None:
-                    session.store.settle_entries(
-                        session.experiment_id, {entry_id: ("released", Decimal("0"))}
-                    )
+            if reservations and ledger is not None:
+                # Batches after a failure (or never needed) were not sent.
+                ledger.release_reserved(list(reservations.values()))
+                session.store.settle_entries(
+                    session.experiment_id,
+                    {
+                        arm_entries[key]: ("released", Decimal("0"))
+                        for key in reservations
+                        if key in arm_entries
+                    },
+                )
     return indexes
 
 
@@ -806,7 +888,7 @@ def _coordinate_tasks(tasks: Iterator[_Task], session: _Session) -> StopReason:
     pending: dict[Future[_TaskOutput], _Claim] = {}
     no_more_tasks = False
     stop: StopReason = None
-    caps = session.plan.embedding_caps if session.plan is not None else None
+    batches = session.plan.case_batches if session.plan is not None else None
     with ThreadPoolExecutor(max_workers=config.max_workers) as executor:
         while pending or not no_more_tasks:
             while len(pending) < config.max_workers and not no_more_tasks and stop is None:
@@ -827,7 +909,7 @@ def _coordinate_tasks(tasks: Iterator[_Task], session: _Session) -> StopReason:
                     task,
                     config,
                     session.providers,
-                    caps,
+                    batches,
                     _dispatch_gate(session.journal, session.experiment_id, claim.entry_ids),
                 )
                 pending[future] = claim
@@ -853,7 +935,7 @@ def _claim(task: _Task, session: _Session) -> _Claim | None:
 
     if session.ledger is None or session.plan is None:
         return _Claim(task=task, reservations={}, entry_ids={})
-    case_calls = session.plan.case_calls()
+    case_calls = session.plan.case_calls(task.retrieval.retriever)
     try:
         reserved = session.ledger.reserve_many(list(case_calls.values()))
     except BudgetExceeded:
@@ -982,18 +1064,17 @@ def _settle_case_embeddings(
     task: _Task,
     session: _Session,
 ) -> tuple[list[EmbeddingCallRecord], dict[str, _PhaseCharge], bool]:
-    """Settle planned per-case embeddings; release unreached ones."""
+    """Settle each planned per-case embedding batch; release unsent ones."""
 
     ledger = session.ledger
     records: list[EmbeddingCallRecord] = []
     charges: dict[str, _PhaseCharge] = {}
     budget_stopped = False
-    by_phase = {outcome.phase: outcome for outcome in outcomes}
-    for phase in CASE_EMBEDDING_PHASES:
-        if phase not in reservations:
+    by_key = {outcome.key: outcome for outcome in outcomes}
+    for phase, reservation in reservations.items():
+        if phase.split("#", maxsplit=1)[0] not in CASE_EMBEDDING_PHASES:
             continue
-        reservation = reservations[phase]
-        outcome = by_phase.get(phase)
+        outcome = by_key.get(phase)
         if outcome is None:
             if ledger is not None:
                 ledger.release_reserved([reservation])
@@ -1053,6 +1134,8 @@ def _settle_embedding(
             phase=outcome.phase,
             config_id=config_id,
             case_id=case_id,
+            batch_index=outcome.batch_index,
+            batch_count=outcome.batch_count,
             model=model,
             text_count=outcome.text_count,
             input_token_upper_bound=outcome.input_token_upper_bound,
@@ -1085,6 +1168,43 @@ def _embedding_error(error: Exception | None) -> str | None:
     return f"{type(error).__name__}: embedding request failed"
 
 
+def _observed_embed_batches(
+    provider: EmbeddingProvider,
+    texts: Sequence[str],
+    *,
+    model: str | None,
+    batches: _PhaseBatches,
+    mark: DispatchMarker | None = None,
+) -> tuple[list[list[float]], list[_EmbeddingOutcome]]:
+    """Send each planned batch as its own observed request, in order.
+
+    A failing batch raises with the outcomes of every batch attempted so far,
+    so sent batches are settled and later batches are released unsent.
+    """
+
+    if sum(len(batch) for batch in batches.ranges) != len(texts):
+        raise ValueError(f"{batches.phase} texts do not match the planned batches")
+    vectors: list[list[float]] = []
+    outcomes: list[_EmbeddingOutcome] = []
+    for index, (batch, cap) in enumerate(zip(batches.ranges, batches.caps, strict=True)):
+        try:
+            batch_vectors, outcome = _observed_embed(
+                provider,
+                [texts[position] for position in batch],
+                model=model,
+                phase=batches.phase,
+                token_cap=cap,
+                mark=mark,
+                batch_index=index,
+                batch_count=len(batches.ranges),
+            )
+        except _EmbeddingCallError as error:
+            raise _EmbeddingCallError([*outcomes, *error.outcomes], error.cause) from error
+        vectors.extend(batch_vectors)
+        outcomes.append(outcome)
+    return vectors, outcomes
+
+
 def _observed_embed(
     provider: EmbeddingProvider,
     texts: Sequence[str],
@@ -1093,10 +1213,12 @@ def _observed_embed(
     phase: EmbeddingPhase,
     token_cap: int | None,
     mark: DispatchMarker | None = None,
+    batch_index: int = 0,
+    batch_count: int = 1,
 ) -> tuple[list[list[float]], _EmbeddingOutcome]:
     """Embed texts within an optional reserved token cap and observe the request.
 
-    ``mark`` journals the phase as sent after the cap check and immediately
+    ``mark`` journals the batch as sent after the cap check and immediately
     before the provider call, so a refused request is never recorded as sent.
     """
 
@@ -1106,17 +1228,21 @@ def _observed_embed(
             f"{phase} input upper bound {bound} exceeds the reserved cap {token_cap}"
         )
         raise _EmbeddingCallError(
-            _EmbeddingOutcome(
-                phase=phase,
-                text_count=len(texts),
-                input_token_upper_bound=bound,
-                error=cap_error,
-                dispatched=False,
-            ),
+            [
+                _EmbeddingOutcome(
+                    phase=phase,
+                    text_count=len(texts),
+                    input_token_upper_bound=bound,
+                    error=cap_error,
+                    dispatched=False,
+                    batch_index=batch_index,
+                    batch_count=batch_count,
+                )
+            ],
             cap_error,
         )
     if mark is not None:
-        mark(phase)
+        mark(_batch_key(phase, batch_index))
     try:
         if isinstance(provider, MeteredEmbeddingProvider):
             response = provider.embed_with_metadata(texts, model=model)
@@ -1129,13 +1255,17 @@ def _observed_embed(
             isinstance(error, ProviderError) and error.http_request_count == 0
         )
         raise _EmbeddingCallError(
-            _EmbeddingOutcome(
-                phase=phase,
-                text_count=len(texts),
-                input_token_upper_bound=bound,
-                error=error,
-                dispatched=not not_dispatched,
-            ),
+            [
+                _EmbeddingOutcome(
+                    phase=phase,
+                    text_count=len(texts),
+                    input_token_upper_bound=bound,
+                    error=error,
+                    dispatched=not not_dispatched,
+                    batch_index=batch_index,
+                    batch_count=batch_count,
+                )
+            ],
             error,
         ) from error
     outcome = _EmbeddingOutcome(
@@ -1143,26 +1273,53 @@ def _observed_embed(
         text_count=len(texts),
         input_token_upper_bound=bound,
         response=response,
+        batch_index=batch_index,
+        batch_count=batch_count,
     )
     if len(response.vectors) != len(texts):
         count_error = ValueError("embedding provider returned an unexpected vector count")
         raise _EmbeddingCallError(
-            _EmbeddingOutcome(
-                phase=phase,
-                text_count=len(texts),
-                input_token_upper_bound=bound,
-                response=response,
-                error=count_error,
-            ),
+            [
+                _EmbeddingOutcome(
+                    phase=phase,
+                    text_count=len(texts),
+                    input_token_upper_bound=bound,
+                    response=response,
+                    error=count_error,
+                    batch_index=batch_index,
+                    batch_count=batch_count,
+                )
+            ],
             count_error,
         )
     return response.vectors, outcome
 
 
+def _embed_phase(
+    provider: EmbeddingProvider,
+    texts: Sequence[str],
+    *,
+    model: str | None,
+    phase: EmbeddingPhase,
+    batches: _PhaseBatches | None,
+    mark: DispatchMarker | None,
+) -> tuple[list[list[float]], list[_EmbeddingOutcome]]:
+    """Embed one per-case phase in planned batches, or in one unmetered request."""
+
+    if batches is not None:
+        return _observed_embed_batches(
+            provider, texts, model=model, batches=batches, mark=mark
+        )
+    vectors, outcome = _observed_embed(
+        provider, texts, model=model, phase=phase, token_cap=None, mark=mark
+    )
+    return vectors, [outcome]
+
+
 def _tasks(
     config: ExperimentConfig,
     dataset: EvaluationDataset,
-    indexes: dict[str, InMemoryIndex],
+    indexes: dict[str, Retriever],
     prompt_engine: PromptEngine,
     skip: set[str] | None = None,
 ) -> Iterator[_Task]:
@@ -1205,23 +1362,27 @@ def _evaluate_task(
     task: _Task,
     config: ExperimentConfig,
     providers: ProviderBundle,
-    caps: _EmbeddingCaps | None = None,
+    batches: _CaseBatches | None = None,
     mark: DispatchMarker | None = None,
 ) -> _TaskOutput:
     embeddings: list[_EmbeddingOutcome] = []
     try:
-        query_vectors, query_outcome = _observed_embed(
-            providers.embedding,
-            [task.case.question],
-            model=config.provider.embedding_model,
-            phase="embedding_query",
-            token_cap=caps.query if caps is not None else None,
-            mark=mark,
-        )
-        embeddings.append(query_outcome)
-        hits = task.index.rank(query_vectors[0], top_k=task.retrieval.top_k)
+        if isinstance(task.index, BM25Index):
+            # Lexical retrieval is local: no query embedding is sent.
+            hits = task.index.search(task.case.question, top_k=task.retrieval.top_k)
+        else:
+            query_vectors, query_outcomes = _embed_phase(
+                providers.embedding,
+                [task.case.question],
+                model=config.provider.embedding_model,
+                phase="embedding_query",
+                batches=batches.query if batches is not None else None,
+                mark=mark,
+            )
+            embeddings.extend(query_outcomes)
+            hits = task.index.rank(query_vectors[0], top_k=task.retrieval.top_k)
     except _EmbeddingCallError as error:
-        embeddings.append(error.outcome)
+        embeddings.extend(error.outcomes)
         raise _TaskFailure("retrieval", error.cause, embeddings=embeddings) from error
     except Exception as error:
         raise _TaskFailure("retrieval", error, embeddings=embeddings) from error
@@ -1240,17 +1401,17 @@ def _evaluate_task(
             "generation", error, hits=hits, embeddings=embeddings
         ) from error
     try:
-        answer_vectors, answer_outcome = _observed_embed(
+        answer_vectors, answer_outcomes = _embed_phase(
             providers.embedding,
             [response.parsed.answer, task.case.reference_answer],
             model=config.provider.embedding_model,
             phase="embedding_answer",
-            token_cap=caps.answer if caps is not None else None,
+            batches=batches.answer if batches is not None else None,
             mark=mark,
         )
-        embeddings.append(answer_outcome)
+        embeddings.extend(answer_outcomes)
     except _EmbeddingCallError as error:
-        embeddings.append(error.outcome)
+        embeddings.extend(error.outcomes)
         raise _TaskFailure(
             "metrics", error.cause, response=response, hits=hits, embeddings=embeddings
         ) from error
@@ -1317,6 +1478,8 @@ def _evaluate_task(
         category=task.case.category,
         answerability=task.case.answerability,
         difficulty=task.case.difficulty,
+        split=task.case.split,
+        review_status=task.case.review.status if task.case.review is not None else None,
         config_id=task.config_id,
         model=config.provider.chat_model,
         answer=response.parsed,
@@ -1363,6 +1526,8 @@ def _failed_case_result(
         category=task.case.category,
         answerability=task.case.answerability,
         difficulty=task.case.difficulty,
+        split=task.case.split,
+        review_status=task.case.review.status if task.case.review is not None else None,
         config_id=task.config_id,
         model=config.provider.chat_model,
         answer=failure.response.parsed if failure.response is not None else None,
@@ -1394,6 +1559,8 @@ def _cancelled_case_result(
         category=task.case.category,
         answerability=task.case.answerability,
         difficulty=task.case.difficulty,
+        split=task.case.split,
+        review_status=task.case.review.status if task.case.review is not None else None,
         config_id=task.config_id,
         model=config.provider.chat_model,
         answer=response.parsed if response is not None else None,
@@ -1633,11 +1800,14 @@ def planned_calls(
 ) -> list[PlannedCall]:
     """Return every capped provider call included in one experiment plan.
 
-    Remote embedding calls are planned per phase: one index batch per arm,
-    one query batch per case, and one answer batch per case. Without an
+    Remote embedding calls are planned per request batch, split by
+    ``provider.embedding_batch_size`` and ``embedding_batch_token_limit``:
+    the index batches of each dense arm, the query batches of each dense case
+    arm, and the answer batches of every case arm. Without an
     ``embedding_provider`` every chunk is counted; with one, only chunks
     whose cache entry matches provider, model, text, and chunking are deducted.
-    The local ``fake-hash`` embedding sends no requests and is not planned.
+    The local ``fake-hash`` embedding and BM25 retrieval send no requests and
+    are not planned.
     """
 
     return _live_plan(config, dataset, documents, embedding_provider).calls()
@@ -1649,13 +1819,28 @@ def _live_plan(
     documents: Sequence[Document],
     embedding_provider: EmbeddingProvider | None,
     *,
-    task_count: int | None = None,
-    arms: set[str] | None = None,
+    remaining: Sequence[tuple[str, str]] | None = None,
 ) -> _LivePlan:
-    """Plan capped calls for ``task_count`` case arms and the indexes of ``arms``."""
+    """Plan capped calls for the ``remaining`` (config ID, case ID) case arms.
 
-    case_count = (
-        len(dataset.cases) * len(config.retrieval) if task_count is None else task_count
+    ``None`` plans every case arm. Indexes are planned for the dense arms
+    that still have case arms to run.
+    """
+
+    tasks = (
+        [
+            (_config_id(retrieval), case.id)
+            for retrieval in config.retrieval
+            for case in dataset.cases
+        ]
+        if remaining is None
+        else list(remaining)
+    )
+    retrievers = {_config_id(retrieval): retrieval.retriever for retrieval in config.retrieval}
+    arms = {config_id for config_id, _ in tasks}
+    case_count = len(tasks)
+    dense_case_count = sum(
+        1 for config_id, _ in tasks if retrievers.get(config_id) == "embedding"
     )
     attempts = config.provider.max_retries + 1
     generation = PlannedCall(
@@ -1692,15 +1877,28 @@ def _live_plan(
             generation=generation,
             judge=judge,
             index_embeddings={},
-            query_embedding=None,
-            answer_embedding=None,
-            embedding_caps=None,
+            query_embedding=[],
+            answer_embedding=[],
+            case_batches=None,
         )
 
-    index_embeddings: dict[str, PlannedCall] = {}
+    def batch_calls(batches: _PhaseBatches, count: int) -> list[PlannedCall]:
+        return [
+            PlannedCall(
+                model=model,
+                input_token_cap=cap * attempts,
+                output_token_cap=0,
+                count=count,
+                phase=_batch_key(batches.phase, index),
+                requests_per_case=attempts,
+            )
+            for index, cap in enumerate(batches.caps)
+        ]
+
+    index_embeddings: dict[str, list[PlannedCall]] = {}
     for retrieval in config.retrieval:
         config_id = _config_id(retrieval)
-        if arms is not None and config_id not in arms:
+        if retrieval.retriever != "embedding" or config_id not in arms:
             continue
         chunks = _arm_chunks(documents, retrieval)
         if embedding_provider is not None:
@@ -1711,46 +1909,43 @@ def _live_plan(
                 cache_path=_embedding_cache_path(config, config_id),
             )
         if chunks:
-            index_embeddings[config_id] = PlannedCall(
-                model=model,
-                input_token_cap=_embedding_token_bound([chunk.text for chunk in chunks])
-                * attempts,
-                output_token_cap=0,
-                count=1,
-                phase="embedding_index",
-                requests_per_case=attempts,
+            index_batches = _PhaseBatches.plan(
+                "embedding_index",
+                [embedding_text_token_bound(chunk.text) for chunk in chunks],
+                config,
             )
-    caps = _EmbeddingCaps(
-        query=max(_embedding_token_bound([case.question]) for case in dataset.cases),
-        answer=max(
-            GENERATED_ANSWER_EMBEDDING_BYTE_CAP
-            + EMBEDDING_TEXT_TOKEN_ALLOWANCE
-            + _embedding_token_bound([case.reference_answer])
-            for case in dataset.cases
+            index_embeddings[config_id] = batch_calls(index_batches, 1)
+    case_batches = _CaseBatches(
+        query=_PhaseBatches.plan(
+            "embedding_query",
+            [max(embedding_text_token_bound(case.question) for case in dataset.cases)],
+            config,
+        ),
+        answer=_PhaseBatches.plan(
+            "embedding_answer",
+            [
+                GENERATED_ANSWER_EMBEDDING_BYTE_CAP + EMBEDDING_TEXT_TOKEN_ALLOWANCE,
+                max(embedding_text_token_bound(case.reference_answer) for case in dataset.cases),
+            ],
+            config,
         ),
     )
     return _LivePlan(
         generation=generation,
         judge=judge,
         index_embeddings=index_embeddings,
-        query_embedding=PlannedCall(
-            model=model,
-            input_token_cap=caps.query * attempts,
-            output_token_cap=0,
-            count=case_count,
-            phase="embedding_query",
-            requests_per_case=attempts,
+        query_embedding=(
+            batch_calls(case_batches.query, dense_case_count) if dense_case_count else []
         ),
-        answer_embedding=PlannedCall(
-            model=model,
-            input_token_cap=caps.answer * attempts,
-            output_token_cap=0,
-            count=case_count,
-            phase="embedding_answer",
-            requests_per_case=attempts,
-        ),
-        embedding_caps=caps,
+        answer_embedding=batch_calls(case_batches.answer, case_count) if case_count else [],
+        case_batches=case_batches,
     )
+
+
+def _batch_key(phase: str, batch_index: int) -> str:
+    """Ledger phase of one embedding batch; the first batch keeps the phase name."""
+
+    return phase if batch_index == 0 else f"{phase}#{batch_index}"
 
 
 def _embedding_token_bound(texts: Sequence[str]) -> int:
@@ -1789,6 +1984,7 @@ def _experiment_identity(
     prompt_engine: PromptEngine,
     documents: Sequence[Document],
     pricing: PricingConfig | None,
+    holdout: HoldoutStatus | None = None,
 ) -> ExperimentIdentity:
     commit_sha, dirty = _git_identity()
     return ExperimentIdentity(
@@ -1796,7 +1992,13 @@ def _experiment_identity(
         mode=config.mode,
         commit_sha=commit_sha,
         dirty=dirty,
-        dataset_hash=_model_hash(dataset.model_dump(mode="json")),
+        dataset_hash=dataset.content_hash(),
+        dataset_version=dataset.version,
+        holdout_freeze_hash=(
+            holdout.holdout_hash
+            if holdout is not None and holdout.state == "frozen"
+            else None
+        ),
         prompt_hashes=prompt_engine.hashes(),
         config=config.model_dump(mode="json"),
         random_seed=config.random_seed,
@@ -1845,13 +2047,7 @@ def _dependency_versions() -> dict[str, str]:
 
 
 def _model_hash(payload: object) -> str:
-    canonical = json.dumps(
-        payload,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    )
-    return hashlib.sha256(canonical.encode()).hexdigest()
+    return canonical_hash(payload)
 
 
 def _case_task_key(config_id: str, case_id: str) -> str:
@@ -1865,10 +2061,7 @@ def _index_task_key(config_id: str) -> str:
 
 
 def _config_id(retrieval: RetrievalConfig) -> str:
-    return (
-        f"chunk{retrieval.chunk_size}-overlap{retrieval.chunk_overlap}-"
-        f"top{retrieval.top_k}-{retrieval.prompt_variant}"
-    )
+    return retrieval.config_id
 
 
 def _mean(values: Sequence[float]) -> float:
