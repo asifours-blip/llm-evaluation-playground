@@ -17,6 +17,14 @@ from rag_quality_lab.config import (
     load_yaml_model,
     validate_dataset_corpus,
 )
+from rag_quality_lab.config.holdout import (
+    HoldoutTampered,
+    freeze_holdout,
+    holdout_lock_path,
+    load_holdout_lock,
+    split_summary,
+    verify_holdout,
+)
 from rag_quality_lab.domain.models import (
     Answerability,
     EvaluationDataset,
@@ -39,6 +47,7 @@ from rag_quality_lab.experiments import (
     run_experiment,
     run_pairwise_comparison,
 )
+from rag_quality_lab.experiments.compare import compare_arms, require_pairable
 from rag_quality_lab.experiments.runner import planned_calls, resume_experiment
 from rag_quality_lab.experiments.store import ExperimentStore
 from rag_quality_lab.metrics.calibration import (
@@ -59,6 +68,7 @@ from rag_quality_lab.providers import (
 )
 from rag_quality_lab.providers.fake import is_local_embedding_model
 from rag_quality_lab.reporting import generate_reports
+from rag_quality_lab.reporting.report import generate_comparison_report
 from rag_quality_lab.retrieval.index import load_documents
 
 CommandHandler = Callable[[argparse.Namespace], int]
@@ -117,9 +127,33 @@ def build_parser() -> argparse.ArgumentParser:
     report.add_argument("--baseline")
     report.set_defaults(handler=_handle_report)
 
-    compare = subcommands.add_parser("compare", help="compare two stored experiments")
+    compare = subcommands.add_parser(
+        "compare",
+        help="compare two stored experiments, or two configuration arms question by question",
+    )
     _add_comparison_arguments(compare)
+    compare.add_argument("--baseline-config")
+    compare.add_argument("--candidate-config")
+    compare.add_argument("--output", type=Path)
     compare.set_defaults(handler=_handle_compare)
+
+    dataset = subcommands.add_parser(
+        "dataset", help="inspect dataset splits and freeze or verify the holdout"
+    )
+    dataset_commands = dataset.add_subparsers(dest="dataset_command", required=True)
+    splits = dataset_commands.add_parser("splits", help="show splits, labels, and holdout state")
+    splits.add_argument("--dataset", required=True, type=Path)
+    splits.set_defaults(handler=_handle_dataset_splits)
+    freeze = dataset_commands.add_parser(
+        "freeze-holdout", help="record the holdout hash of this dataset version"
+    )
+    freeze.add_argument("--dataset", required=True, type=Path)
+    freeze.set_defaults(handler=_handle_dataset_freeze)
+    verify = dataset_commands.add_parser(
+        "verify", help="check that a frozen holdout is unchanged"
+    )
+    verify.add_argument("--dataset", required=True, type=Path)
+    verify.set_defaults(handler=_handle_dataset_verify)
 
     regression = subcommands.add_parser("regression", help="evaluate regression rules")
     regression.add_argument("--fixture", type=Path)
@@ -183,14 +217,49 @@ def _handle_validate(args: argparse.Namespace) -> int:
     config = load_experiment_config(args.config)
     dataset = load_dataset(config.dataset_path)
     validate_dataset_corpus(dataset, load_documents(config.knowledge_base_path))
+    holdout = verify_holdout(dataset, load_holdout_lock(holdout_lock_path(config.dataset_path)))
     _print_json(
         {
             "status": "valid",
             "mode": config.mode,
-            "case_count": len(dataset.cases),
+            "case_count": len(dataset.select_splits(config.splits).cases),
             "arm_count": len(config.retrieval),
+            "dataset_version": dataset.version,
+            "holdout_state": holdout.state,
         }
     )
+    return 0
+
+
+def _handle_dataset_splits(args: argparse.Namespace) -> int:
+    dataset = load_dataset(args.dataset)
+    _print_json(split_summary(dataset, load_holdout_lock(holdout_lock_path(args.dataset))))
+    return 0
+
+
+def _handle_dataset_freeze(args: argparse.Namespace) -> int:
+    dataset = load_dataset(args.dataset)
+    lock_path = holdout_lock_path(args.dataset)
+    freeze = freeze_holdout(dataset, lock_path)
+    _print_json({**freeze.model_dump(mode="json"), "lock_path": str(lock_path)})
+    return 0
+
+
+def _handle_dataset_verify(args: argparse.Namespace) -> int:
+    dataset = load_dataset(args.dataset)
+    try:
+        status = verify_holdout(dataset, load_holdout_lock(holdout_lock_path(args.dataset)))
+    except HoldoutTampered as error:
+        _print_json(
+            {
+                "dataset_name": dataset.name,
+                "dataset_version": dataset.version,
+                "state": "tampered",
+                "error": str(error),
+            }
+        )
+        return 1
+    _print_json(status.model_dump(mode="json"))
     return 0
 
 
@@ -331,11 +400,35 @@ def _handle_report(args: argparse.Namespace) -> int:
 
 
 def _handle_compare(args: argparse.Namespace) -> int:
+    arms = (args.baseline_config, args.candidate_config)
+    if any(arm is not None for arm in arms) and not all(arm is not None for arm in arms):
+        raise ValueError("--baseline-config and --candidate-config must be given together")
     with ExperimentStore(args.database) as store:
         baseline = store.get_experiment(store.resolve_experiment_id(args.baseline))
         candidate = store.get_experiment(store.resolve_experiment_id(args.candidate))
-    comparison = compare_experiments(baseline, candidate)
-    _print_json(comparison.model_dump(mode="json"))
+    if args.baseline_config is None:
+        if args.output is not None:
+            raise ValueError("--output requires --baseline-config and --candidate-config")
+        comparison = compare_experiments(baseline, candidate)
+        _print_json(comparison.model_dump(mode="json"))
+        return 0
+    paired = compare_arms(baseline, candidate, args.baseline_config, args.candidate_config)
+    if args.output is None:
+        _print_json(paired.model_dump(mode="json"))
+        return 0
+    paths = generate_comparison_report(paired, args.output)
+    _print_json(
+        {
+            "report_json": str(paths.json.resolve()),
+            "report_html": str(paths.html.resolve()),
+            "json_sha256": paths.json_sha256,
+            "html_sha256": paths.html_sha256,
+            "config_differences": [
+                difference.model_dump(mode="json") for difference in paired.config_differences
+            ],
+            "warning": paired.warning,
+        }
+    )
     return 0
 
 
@@ -542,6 +635,8 @@ def _handle_pairwise(args: argparse.Namespace) -> int:
         candidate_id = store.resolve_experiment_id(args.candidate)
         baseline = store.get_experiment(baseline_id)
         candidate = store.get_experiment(candidate_id)
+        # Refuse mismatched conditions before planning or sending any request.
+        require_pairable(baseline, candidate, args.baseline_config, args.candidate_config)
         pair_count = _pairwise_case_count(
             baseline,
             candidate,
@@ -708,6 +803,8 @@ def _provider_bundle(
         timeout_seconds=config.provider.timeout_seconds,
         max_retries=config.provider.max_retries,
         extra_body=_provider_extra_body(config),
+        embedding_batch_size=config.provider.embedding_batch_size,
+        embedding_batch_token_limit=config.provider.embedding_batch_token_limit,
     )
     embedding = (
         FakeEmbeddingProvider(_fake_dimensions(config))

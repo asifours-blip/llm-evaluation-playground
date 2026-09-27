@@ -334,7 +334,13 @@ def parameter_differences(
         )
         for path in diff_paths(left_prompts, right_prompts)
     )
-    if baseline.prompt_version != candidate.prompt_version:
+    # Records made before prompt versions existed leave it unset; their
+    # template hashes above still expose any prompt change.
+    if (
+        baseline.prompt_version is not None
+        and candidate.prompt_version is not None
+        and baseline.prompt_version != candidate.prompt_version
+    ):
         differences.append(
             ParameterDifference(
                 path="prompts.version",
