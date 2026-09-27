@@ -19,6 +19,7 @@ def test_strict_judge_live_configuration_stays_under_budget() -> None:
         planned=planned_calls(config, len(dataset.cases) * len(config.retrieval)),
         pricing=pricing,
         budget=config.budget,
+        on_date=pricing.verified_at,
     )
 
     assert decision.allowed is True
@@ -39,6 +40,7 @@ def test_384_live_configuration_stays_under_budget() -> None:
         planned=plan,
         pricing=pricing,
         budget=config.budget,
+        on_date=pricing.verified_at,
     )
 
     assert decision.allowed is True

@@ -3,6 +3,7 @@ import os
 import re
 import subprocess
 import sys
+from datetime import date
 from pathlib import Path
 
 import yaml
@@ -48,7 +49,7 @@ def write_cli_fixture(
             {
                 "provider": "fake",
                 "currency": "CNY",
-                "verified_at": "2026-08-21",
+                "verified_at": date.today().isoformat(),
                 "source_url": "https://example.com/pricing",
                 "models": {
                     "fake-model": {"input_cache_miss": 1, "output": 2}
@@ -137,7 +138,7 @@ def test_live_preflight_includes_generation_and_judge_calls(tmp_path: Path) -> N
         1536,
     ]
     assert [call["requests_per_case"] for call in payload["planned_calls"]] == [6, 6]
-    assert payload["pricing_verified_at"] == "2026-08-21"
+    assert payload["pricing_verified_at"] == date.today().isoformat()
     assert payload["pricing_source_url"] == "https://example.com/pricing"
 
 
