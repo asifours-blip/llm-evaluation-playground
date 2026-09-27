@@ -18,18 +18,6 @@ from typing import Any
 
 import pytest
 import yaml
-from resume_harness import (
-    API_KEY_ENV,
-    CASES,
-    CORPUS_TEXT,
-    LoggedSession,
-    generation_only_prices,
-    kill_when_frozen,
-    read_log,
-    remote_bundle,
-    start_child,
-    write_inputs,
-)
 
 from rag_quality_lab.config import load_dataset, load_experiment_config
 from rag_quality_lab.domain.models import (
@@ -52,6 +40,18 @@ from rag_quality_lab.experiments.store import ExperimentStore
 from rag_quality_lab.providers.fake import FakeChatProvider, FakeEmbeddingProvider
 from rag_quality_lab.reporting import generate_reports
 from rag_quality_lab.retrieval.index import load_documents
+from tests.experiments.resume_harness import (
+    API_KEY_ENV,
+    CASES,
+    CORPUS_TEXT,
+    LoggedSession,
+    generation_only_prices,
+    kill_when_frozen,
+    read_log,
+    remote_bundle,
+    start_child,
+    write_inputs,
+)
 
 # Per-case generation output cap with max_retries=0; pricing it at this rate
 # makes every case cost exactly 0.2 CNY, its full reservation.

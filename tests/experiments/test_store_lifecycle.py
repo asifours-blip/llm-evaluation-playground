@@ -13,14 +13,14 @@ from decimal import Decimal
 from pathlib import Path
 
 import pytest
+
+from rag_quality_lab.domain.models import ExperimentIdentity, ExperimentStatus
 from rag_quality_lab.experiments.liveness import (
     LeaseHeartbeat,
     ProcessOwner,
     current_owner,
     probe_process,
 )
-
-from rag_quality_lab.domain.models import ExperimentIdentity, ExperimentStatus
 from rag_quality_lab.experiments.store import SCHEMA_VERSION, ExperimentStore
 
 
