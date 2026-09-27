@@ -14,11 +14,24 @@ from typing import Any, Literal
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
-from rag_quality_lab.domain.models import CaseResult, ExperimentRecord, ExperimentStatus
-from rag_quality_lab.experiments.compare import ComparisonResult
+from rag_quality_lab.domain.models import (
+    UNLABELED,
+    Answerability,
+    CaseResult,
+    ExperimentRecord,
+    ExperimentStatus,
+    canonical_hash,
+)
+from rag_quality_lab.experiments.compare import (
+    SPLIT_ORDER,
+    ComparisonResult,
+    PairedComparison,
+)
 from rag_quality_lab.metrics.calibration import CalibrationResult
 
 ReportBadge = Literal["mock", "pilot", "final"]
+ANSWERABLE_ONLY_PREFIXES = ("retrieval_", "answer_", "over_abstention")
+UNANSWERABLE_ONLY_METRICS = frozenset({"false_answer"})
 
 
 @dataclass(frozen=True)
@@ -50,10 +63,32 @@ def generate_reports(
         comparison=comparison,
         calibration=calibration,
     )
-    destination = Path(output_dir)
+    return _write_report(payload, Path(output_dir), experiment.id, "report.html.jinja2")
+
+
+def generate_comparison_report(
+    comparison: PairedComparison, output_dir: str | Path
+) -> ReportPaths:
+    """Write a paired arm comparison as canonical JSON and self-contained HTML."""
+
+    payload = comparison.model_dump(mode="json")
+    name = "comparison-" + canonical_hash(
+        [
+            comparison.baseline_id,
+            comparison.baseline_config_id,
+            comparison.candidate_id,
+            comparison.candidate_config_id,
+        ]
+    )[:16]
+    return _write_report(payload, Path(output_dir), name, "comparison.html.jinja2")
+
+
+def _write_report(
+    payload: dict[str, Any], destination: Path, name: str, template: str
+) -> ReportPaths:
     destination.mkdir(parents=True, exist_ok=True)
-    json_path = destination / f"{experiment.id}.json"
-    html_path = destination / f"{experiment.id}.html"
+    json_path = destination / f"{name}.json"
+    html_path = destination / f"{name}.html"
     json_text = json.dumps(
         payload,
         ensure_ascii=False,
@@ -67,7 +102,7 @@ def generate_reports(
         loader=FileSystemLoader(template_dir),
         autoescape=select_autoescape(enabled_extensions=("html", "jinja2")),
     )
-    rendered_html = environment.get_template("report.html.jinja2").render(report=payload)
+    rendered_html = environment.get_template(template).render(report=payload)
     html_text = "\n".join(line.rstrip() for line in rendered_html.splitlines()) + "\n"
     html_path.write_text(html_text, encoding="utf-8", newline="\n")
     return ReportPaths(
@@ -118,6 +153,8 @@ def _report_payload(
         "summary": experiment.summary,
         "system": _system_metrics(results),
         "category_breakdown": _category_breakdown(results),
+        "split_breakdown": _split_breakdown(experiment),
+        "dataset_labels": _dataset_labels(results),
         "failures": failures,
         "case_results": [result.model_dump(mode="json") for result in results],
         "baseline_comparison": (
@@ -138,6 +175,9 @@ def _report_payload(
         payload["run_attempts"] = [
             attempt.model_dump(mode="json") for attempt in experiment.attempts
         ]
+    if comparison is not None and comparison.warning is not None:
+        # Additive key: shown first because the deltas cannot be attributed.
+        payload["comparison_warning"] = comparison.warning
     warning = experiment.code_version_warning()
     if warning is not None:
         payload["code_version_warning"] = warning
@@ -202,6 +242,102 @@ def _category_breakdown(results: Sequence[CaseResult]) -> dict[str, dict[str, fl
         }
         for category, category_metrics in sorted(metrics.items())
     }
+
+
+def _split_breakdown(experiment: ExperimentRecord) -> dict[str, dict[str, Any]]:
+    """Per-split, per-configuration metric means; splits are never pooled.
+
+    Retrieval, answer, and over-abstention metrics average answerable cases
+    and false answers average unanswerable cases, matching the run summary.
+    Only a holdout whose frozen hash was verified at run time is held-out
+    evidence; dev and unlabeled cases never are.
+    """
+
+    groups: dict[str, list[CaseResult]] = defaultdict(list)
+    for result in experiment.case_results:
+        groups[result.split or UNLABELED].append(result)
+    freeze_hash = experiment.identity.holdout_freeze_hash
+    breakdown: dict[str, dict[str, Any]] = {}
+    for split in SPLIT_ORDER:
+        results = groups.get(split)
+        if not results:
+            continue
+        entry: dict[str, Any] = {
+            "case_count": len({result.case_id for result in results}),
+            "result_count": len(results),
+            "metrics": _config_metric_means(results),
+        }
+        if split == "holdout" and freeze_hash is not None:
+            entry.update(
+                held_out=True,
+                holdout_freeze_hash=freeze_hash,
+                note=f"frozen holdout (hash {freeze_hash}); held-out evidence",
+            )
+        elif split == "holdout":
+            entry.update(
+                held_out=False,
+                note="holdout split was not frozen when this ran; not held-out evidence",
+            )
+        elif split == "dev":
+            entry.update(
+                held_out=False,
+                note="dev split used for tuning; not held-out evidence",
+            )
+        else:
+            entry.update(
+                held_out=False,
+                note=f"split {UNLABELED} (unlabeled); not held-out evidence",
+            )
+        breakdown[split] = entry
+    return breakdown
+
+
+def _config_metric_means(results: Sequence[CaseResult]) -> dict[str, dict[str, float]]:
+    values: dict[str, dict[str, list[float]]] = defaultdict(lambda: defaultdict(list))
+    for result in results:
+        if result.status != "completed":
+            continue
+        answerable = result.answerability is not Answerability.UNANSWERABLE
+        for metric, value in result.metrics.items():
+            if metric.startswith(ANSWERABLE_ONLY_PREFIXES) and not answerable:
+                continue
+            if metric in UNANSWERABLE_ONLY_METRICS and answerable:
+                continue
+            values[result.config_id][metric].append(value)
+    return {
+        config_id: {
+            metric: statistics.fmean(metric_values)
+            for metric, metric_values in sorted(metrics.items())
+        }
+        for config_id, metrics in sorted(values.items())
+    }
+
+
+def _dataset_labels(results: Sequence[CaseResult]) -> dict[str, dict[str, int]]:
+    """Count distinct cases per label value; absent labels count as unlabeled."""
+
+    cases: dict[str, CaseResult] = {}
+    for result in results:
+        cases.setdefault(result.case_id, result)
+    labels: dict[str, dict[str, int]] = {
+        "split": {},
+        "difficulty": {},
+        "review_status": {},
+        "answerability": {},
+    }
+    for result in cases.values():
+        for key, value in (
+            ("split", result.split),
+            ("difficulty", result.difficulty),
+            ("review_status", result.review_status),
+            (
+                "answerability",
+                result.answerability.value if result.answerability is not None else None,
+            ),
+        ):
+            label = value or UNLABELED
+            labels[key][label] = labels[key].get(label, 0) + 1
+    return labels
 
 
 def _nearest_rank(values: Sequence[float], percentile: float) -> float:

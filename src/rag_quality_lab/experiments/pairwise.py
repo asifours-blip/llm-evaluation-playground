@@ -9,6 +9,11 @@ from typing import Literal
 
 from rag_quality_lab.domain.models import CaseResult, ExperimentConfig, ExperimentRecord
 from rag_quality_lab.experiments.budget import BudgetLedger, PlannedCall
+from rag_quality_lab.experiments.compare import (
+    confounding_warning,
+    parameter_differences,
+    require_pairable,
+)
 from rag_quality_lab.metrics.judge import (
     PairwiseCaseResult,
     PairwiseComparisonRecord,
@@ -57,10 +62,17 @@ def run_pairwise_comparison(
     judge: JudgeProvider,
     ledger: BudgetLedger | None = None,
 ) -> PairwiseComparisonRecord:
-    """Compare matching case/model outputs in A/B and B/A order."""
+    """Compare matching case/model outputs in A/B and B/A order.
 
-    if baseline.identity.dataset_hash != candidate.identity.dataset_hash:
-        raise ValueError("pairwise experiments must use the same dataset hash")
+    Refuses before any judge request unless both arms share corpus, dataset
+    version and content, question set, and random seed; records every other
+    differing parameter and warns when more than one differs.
+    """
+
+    require_pairable(baseline, candidate, baseline_config_id, candidate_config_id)
+    differences = parameter_differences(
+        baseline.identity, candidate.identity, baseline_config_id, candidate_config_id
+    )
     baseline_cases = _selected_results(baseline, baseline_config_id)
     candidate_cases = _selected_results(candidate, candidate_config_id)
     keys = sorted(set(baseline_cases) & set(candidate_cases))
@@ -169,6 +181,8 @@ def run_pairwise_comparison(
         judge_model=_judge_model(config),
         outcomes=outcomes,
         summary=_summary(outcomes),
+        config_differences=differences,
+        warning=confounding_warning(differences),
     )
 
 
