@@ -77,17 +77,24 @@ def preflight_budget(
     budget: BudgetConfig,
     on_date: date | None = None,
     max_pricing_age_days: int = 7,
+    spent: Decimal = Decimal("0"),
 ) -> PreflightDecision:
-    """Decide whether the complete buffered plan fits the configured threshold."""
+    """Decide whether the complete buffered plan fits the configured threshold.
+
+    ``spent`` is the persisted spend of an experiment being resumed; the
+    remaining plan is then compared with the unspent part of the hard limit.
+    """
 
     if pricing.currency != budget.currency:
         raise ValueError("budget and pricing currency must match")
+    if spent < 0:
+        raise ValueError("spent must be non-negative")
     pricing.require_models(call.model for call in planned)
     unbuffered = sum(
         (planned_call_cost(call, pricing) for call in planned), start=Decimal("0")
     )
     buffered = unbuffered * budget.safety_multiplier
-    threshold = budget.hard_limit * budget.preflight_fraction
+    threshold = max(budget.hard_limit - spent, Decimal("0")) * budget.preflight_fraction
     evaluation_date = on_date or date.today()
     if pricing.is_stale(evaluation_date, max_age_days=max_pricing_age_days):
         return PreflightDecision(
@@ -105,7 +112,12 @@ def preflight_budget(
         buffered_cost=buffered,
         threshold=threshold,
         hard_limit=budget.hard_limit,
-        reason="allowed" if allowed else "buffered cost exceeds preflight threshold",
+        reason=(
+            "allowed"
+            if allowed
+            else "buffered cost exceeds preflight threshold"
+            + (" of the remaining budget" if spent else "")
+        ),
     )
 
 
@@ -127,12 +139,22 @@ def calculate_actual_cost(usage: TokenUsage, price: ModelPrice) -> Decimal:
 class BudgetLedger:
     """Track actual spend and outstanding capped-call reservations."""
 
-    def __init__(self, *, budget: BudgetConfig, pricing: PricingConfig) -> None:
+    def __init__(
+        self,
+        *,
+        budget: BudgetConfig,
+        pricing: PricingConfig,
+        spent: Decimal = Decimal("0"),
+    ) -> None:
+        """Create a ledger, optionally continuing from persisted spend."""
+
         if budget.currency != pricing.currency:
             raise ValueError("budget and pricing currency must match")
+        if spent < 0:
+            raise ValueError("spent must be non-negative")
         self.budget = budget
         self.pricing = pricing
-        self.spent = Decimal("0")
+        self.spent = spent
         self.reserved = Decimal("0")
 
     def reserve(self, *, model: str, input_token_cap: int, output_token_cap: int) -> Decimal:

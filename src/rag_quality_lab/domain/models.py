@@ -341,9 +341,16 @@ class RetrievalHit(BaseModel):
 
 
 class ExperimentStatus(StrEnum):
-    """Lifecycle states persisted for an experiment."""
+    """Lifecycle states persisted for an experiment.
+
+    RUNNING may become any other state. INTERRUPTED (the owning process
+    stopped without finishing) may become RUNNING again through resume, or
+    CANCELLED. COMPLETED, FAILED, BUDGET_EXCEEDED, and CANCELLED are terminal.
+    """
 
     RUNNING = "running"
+    INTERRUPTED = "interrupted"
+    CANCELLED = "cancelled"
     COMPLETED = "completed"
     FAILED = "failed"
     BUDGET_EXCEEDED = "budget_exceeded"
@@ -362,6 +369,11 @@ class ExperimentIdentity(BaseModel):
     random_seed: int
     python_version: str
     dependency_versions: dict[str, str] = Field(default_factory=dict)
+    # Frozen resume identity; experiments recorded before resume support
+    # leave these unset and cannot be resumed.
+    corpus_hash: str | None = None
+    prompt_version: str | None = None
+    pricing_snapshot: dict[str, Any] | None = None
 
 
 class CaseResult(BaseModel):
@@ -423,6 +435,28 @@ class EmbeddingCallRecord(BaseModel):
     error: str | None = None
 
 
+LedgerEntryState = Literal["reserved", "dispatched", "settled", "released", "unknown"]
+
+
+class LedgerEntry(BaseModel):
+    """Persisted budget reservation for one provider phase of one task.
+
+    ``reserved`` entries were never sent; ``dispatched`` entries were handed
+    to the provider. When the owning process stops before settlement, the
+    former are released and the latter become ``unknown`` and are charged at
+    their full reservation.
+    """
+
+    task_key: str
+    config_id: str
+    case_id: str | None = None
+    phase: str
+    attempt: int = Field(ge=1)
+    state: LedgerEntryState
+    reserved: Decimal = Field(ge=0)
+    charged: Decimal = Field(default=Decimal("0"), ge=0)
+
+
 class ExperimentRecord(BaseModel):
     """Typed experiment identity, lifecycle, and case outcomes."""
 
@@ -432,3 +466,4 @@ class ExperimentRecord(BaseModel):
     case_results: list[CaseResult] = Field(default_factory=list)
     summary: dict[str, float] = Field(default_factory=dict)
     embedding_calls: list[EmbeddingCallRecord] = Field(default_factory=list)
+    unknown_calls: list[LedgerEntry] = Field(default_factory=list)
