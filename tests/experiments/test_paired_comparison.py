@@ -45,13 +45,15 @@ def config_payload(
         database_path=Path(f"{name}.sqlite3"),
         artifact_dir=Path(f"artifacts/{name}"),
         random_seed=seed,
-        provider=ProviderConfig(
-            name="fake",
-            base_url="https://offline.invalid/v1",
-            api_key_env="UNUSED",
-            chat_model="fake-chat",
-            embedding_model="fake-hash-64",
-            judge_model="fake-judge",
+        provider=ProviderConfig.model_validate(
+            {
+                "name": "fake",
+                "base_url": "https://offline.invalid/v1",
+                "api_key_env": "UNUSED",
+                "chat_model": "fake-chat",
+                "embedding_model": "fake-hash-64",
+                "judge_model": "fake-judge",
+            }
         ),
         retrieval=arms,
         budget=BudgetConfig(hard_limit=Decimal("20")),

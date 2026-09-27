@@ -14,6 +14,7 @@ from rag_quality_lab.config.holdout import (
     freeze_holdout,
     holdout_lock_path,
     load_holdout_lock,
+    split_summary,
     verify_holdout,
 )
 from rag_quality_lab.config.loaders import load_dataset, load_experiment_config
@@ -228,3 +229,21 @@ def test_dataset_cli_shows_splits_freezes_and_verifies(tmp_path: Path) -> None:
     refused_payload = json.loads(refused.stdout)
     assert refused_payload["state"] == "tampered"
     assert "new dataset version" in refused_payload["error"]
+
+
+def test_split_summary_counts_labels_and_reports_tampering(tmp_path: Path) -> None:
+    path = write_dataset(tmp_path / "dataset.json", [*base_cases(), case("rag-004", None)])
+    freeze_holdout(load_dataset(path), holdout_lock_path(path))
+    lock = load_holdout_lock(holdout_lock_path(path))
+
+    summary = split_summary(load_dataset(path), lock)
+    tampered = base_cases()
+    tampered[2]["question"] = "Edited?"
+    write_dataset(path, tampered)
+    refused = split_summary(load_dataset(path), lock)
+
+    assert summary["splits"] == {"dev": 2, "holdout": 1, "未标注": 1}
+    assert summary["review_status"] == {"未标注": 4}
+    assert summary["case_ids_by_split"] == {"dev": ["rag-001", "rag-002"], "holdout": ["rag-003"]}
+    assert summary["holdout"]["state"] == "frozen"  # type: ignore[index]
+    assert refused["holdout"]["state"] == "tampered"  # type: ignore[index]

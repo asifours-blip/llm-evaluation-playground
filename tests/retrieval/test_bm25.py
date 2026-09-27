@@ -2,6 +2,7 @@
 
 import math
 from collections.abc import Sequence
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
@@ -145,12 +146,14 @@ def bm25_config(tmp_path: Path, *, embedding_model: str = "fake-hash-16") -> Exp
         database_path=tmp_path / "runs.sqlite3",
         artifact_dir=tmp_path / "artifacts",
         max_workers=1,
-        provider=ProviderConfig(
-            name="fake",
-            base_url="https://offline.invalid/v1",
-            api_key_env="UNUSED",
-            chat_model="fake-chat",
-            embedding_model=embedding_model,
+        provider=ProviderConfig.model_validate(
+            {
+                "name": "fake",
+                "base_url": "https://offline.invalid/v1",
+                "api_key_env": "UNUSED",
+                "chat_model": "fake-chat",
+                "embedding_model": embedding_model,
+            }
         ),
         retrieval=[
             RetrievalConfig(
@@ -161,7 +164,7 @@ def bm25_config(tmp_path: Path, *, embedding_model: str = "fake-hash-16") -> Exp
                 retriever="bm25",
             )
         ],
-        budget=BudgetConfig(hard_limit=20),
+        budget=BudgetConfig(hard_limit=Decimal("20")),
     )
 
 
