@@ -399,7 +399,9 @@ class CaseResult(BaseModel):
     latency_ms: float = Field(default=0, ge=0)
     cost: Decimal = Field(default=Decimal("0"), ge=0)
     cost_estimated: bool = False
-    status: Literal["completed", "failed", "skipped"]
+    # "cancelled": the case arm stopped at a cancellation before finishing;
+    # requests already sent are settled, but it carries no metrics.
+    status: Literal["completed", "failed", "skipped", "cancelled"]
     failure_phase: Literal["retrieval", "generation", "metrics", "judge"] | None = None
     error: str | None = None
 

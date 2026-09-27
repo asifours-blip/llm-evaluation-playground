@@ -380,18 +380,22 @@ def test_restored_budget_allows_only_the_unspent_remainder(tmp_path: Path) -> No
     assert Decimal(str(resumed.summary["total_cost"])) == Decimal("1.0")
 
 
-def test_cancel_stops_new_cases_and_settles_the_in_flight_case(tmp_path: Path) -> None:
+def run_and_cancel_while_blocked(
+    tmp_path: Path, blocked_kind: str
+) -> tuple[ExperimentConfig, ExperimentRecord, Path, int, subprocess.CompletedProcess[str]]:
+    """Run in a thread, cancel through the CLI while rag-001 blocks in one request."""
+
     config = load_experiment_config(write_inputs(tmp_path))
     log = tmp_path / "requests.jsonl"
     blocked = threading.Event()
     release = threading.Event()
 
-    def hold_first_generation(entry: dict[str, Any]) -> None:
-        if entry["kind"] == "generation" and entry["case_id"] == "rag-001":
+    def hold(entry: dict[str, Any]) -> None:
+        if entry["kind"] == blocked_kind and entry["case_id"] == "rag-001":
             blocked.set()
             assert release.wait(60)
 
-    session = LoggedSession(log, on_request=hold_first_generation)
+    session = LoggedSession(log, on_request=hold)
     outcome: list[ExperimentRecord] = []
     worker = threading.Thread(
         target=lambda: outcome.append(
@@ -401,7 +405,6 @@ def test_cancel_stops_new_cases_and_settles_the_in_flight_case(tmp_path: Path) -
     worker.start()
     assert blocked.wait(60)
     experiment_id = only_experiment_id(config.database_path)
-
     cancel = subprocess.run(
         [
             sys.executable,
@@ -420,24 +423,73 @@ def test_cancel_stops_new_cases_and_settles_the_in_flight_case(tmp_path: Path) -
     requests_at_cancel = len(read_log(log))
     release.set()
     worker.join(60)
+    assert not worker.is_alive()
+    return config, outcome[0], log, requests_at_cancel, cancel
+
+
+def assert_cancelled_case_is_settled_but_unscored(
+    config: ExperimentConfig, record: ExperimentRecord
+) -> None:
+    assert record.status is ExperimentStatus.CANCELLED
+    assert [case.case_id for case in record.case_results] == ["rag-001"]
+    cancelled = record.case_results[0]
+    assert cancelled.status == "cancelled"
+    assert cancelled.metrics == {}
+    assert cancelled.judge is None
+    assert record.summary["completed_cases"] == 0.0
+    assert record.summary["failure_count"] == 0.0
+    assert record.summary["cancelled_case_count"] == 1.0
+    with ExperimentStore(config.database_path) as store:
+        entries = {entry.phase: entry for entry in store.ledger_entries(record.id)}
+    assert entries["generation_with_repair"].state == "settled"
+    assert entries["generation_with_repair"].charged == cancelled.cost > 0
+    assert entries["judge_with_repair"].state == "released"
+    assert entries["judge_with_repair"].charged == 0
+    assert Decimal(str(record.summary["total_cost"])) == spent(config, record.id)
+    report = json.loads(
+        generate_reports(record, config.artifact_dir).json.read_text("utf-8")
+    )
+    assert report["failures"] == []
+    assert report["system"]["failure_count"] == 0
+    assert [case["case_id"] for case in report["cancelled_cases"]] == ["rag-001"]
+
+
+def test_cancel_during_generation_sends_no_further_phase(tmp_path: Path) -> None:
+    config, record, log, requests_at_cancel, cancel = run_and_cancel_while_blocked(
+        tmp_path, "generation"
+    )
 
     assert cancel.returncode == 0, cancel.stderr
     assert json.loads(cancel.stdout)["cancel_requested"] is True
-    record = outcome[0]
-    assert record.status is ExperimentStatus.CANCELLED
-    after_cancel = read_log(log)[requests_at_cancel:]
-    assert {entry["case_id"] for entry in after_cancel} == {"rag-001"}
-    assert {entry["kind"] for entry in after_cancel} == {"embedding_answer", "judge"}
-    assert [case.case_id for case in record.case_results] == ["rag-001"]
-    assert record.case_results[0].status == "completed"
-    assert record.case_results[0].cost > 0
+    assert read_log(log)[requests_at_cancel:] == []
+    assert_cancelled_case_is_settled_but_unscored(config, record)
     with ExperimentStore(config.database_path) as store:
-        entries = store.ledger_entries(experiment_id)
-    assert {entry.state for entry in entries} <= {"settled", "released"}
-    assert Decimal(str(record.summary["total_cost"])) == spent(config, experiment_id)
+        entries = {entry.phase: entry for entry in store.ledger_entries(record.id)}
+    assert entries["embedding_answer"].state == "released"
 
     with pytest.raises(ResumeRefused, match="cancelled"):
-        resume(config, experiment_id, log)
+        resume(config, record.id, log)
+
+
+def test_cancel_after_generation_returns_never_sends_the_judge(tmp_path: Path) -> None:
+    config, record, log, requests_at_cancel, cancel = run_and_cancel_while_blocked(
+        tmp_path, "embedding_answer"
+    )
+
+    assert cancel.returncode == 0, cancel.stderr
+    requests = read_log(log)
+    assert requests[requests_at_cancel:] == []
+    assert [entry for entry in requests if entry["kind"] == "judge"] == []
+    assert [entry["kind"] for entry in requests if entry["case_id"] == "rag-001"] == [
+        "embedding_query",
+        "generation",
+        "embedding_answer",
+    ]
+    assert_cancelled_case_is_settled_but_unscored(config, record)
+    with ExperimentStore(config.database_path) as store:
+        entries = {entry.phase: entry for entry in store.ledger_entries(record.id)}
+    assert entries["embedding_answer"].state == "settled"
+    assert entries["embedding_answer"].charged > 0
 
 
 def test_resume_of_completed_experiment_is_refused(tmp_path: Path) -> None:

@@ -106,7 +106,9 @@ def _report_payload(
 ) -> dict[str, Any]:
     results = experiment.case_results
     failures = [
-        result.model_dump(mode="json") for result in results if result.status != "completed"
+        result.model_dump(mode="json")
+        for result in results
+        if result.status not in {"completed", "cancelled"}
     ]
     payload: dict[str, Any] = {
         "id": experiment.id,
@@ -130,6 +132,11 @@ def _report_payload(
         payload["embedding_calls"] = [
             call.model_dump(mode="json") for call in experiment.embedding_calls
         ]
+    cancelled = [result for result in results if result.status == "cancelled"]
+    if cancelled:
+        # Additive key: case arms stopped by cancellation are counted apart
+        # from failures and never scored.
+        payload["cancelled_cases"] = [result.model_dump(mode="json") for result in cancelled]
     if experiment.unknown_calls:
         # Additive key: calls sent before an interruption but never settled,
         # charged at their reserved cap.
@@ -159,7 +166,9 @@ def _system_metrics(
         "output_tokens": sum(usage.output_tokens for usage in usages),
         "total_tokens": sum(usage.total_tokens for usage in usages),
         "total_cost": float(sum(result.cost for result in results)),
-        "failure_count": sum(result.status != "completed" for result in results),
+        "failure_count": sum(
+            result.status not in {"completed", "cancelled"} for result in results
+        ),
         "http_request_count": (
             sum(count for count in request_counts if count is not None)
             if request_count_complete

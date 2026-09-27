@@ -111,6 +111,14 @@ class ResumeRefused(ValueError):
     """An experiment cannot be resumed; no request was sent and no state changed."""
 
 
+class _TaskCancelled(RuntimeError):
+    """Raised instead of dispatching a phase once cancellation is observed."""
+
+    def __init__(self, phase: str) -> None:
+        super().__init__(f"cancelled before {phase} was sent")
+        self.phase = phase
+
+
 @dataclass(frozen=True)
 class ProviderBundle:
     """Provider implementations used by one runner invocation."""
@@ -345,7 +353,7 @@ def run_experiment(
                     ledger=ledger,
                     pricing=pricing,
                     plan=plan,
-                    journal=_open_journal(resources, store, ledger),
+                    journal=_open_journal(resources, store),
                 )
                 stop = _execute(session, skip=set())
                 _finish(store, experiment_id, dataset, stop)
@@ -466,7 +474,7 @@ def resume_experiment(
                         ledger=ledger,
                         pricing=pricing,
                         plan=plan,
-                        journal=_open_journal(resources, store, ledger),
+                        journal=_open_journal(resources, store),
                     )
                     stop = _execute(session, skip=skip)
                 _finish(store, experiment_id, dataset, stop)
@@ -599,11 +607,7 @@ def _hold_lease(resources: ExitStack, store: ExperimentStore, experiment_id: str
     )
 
 
-def _open_journal(
-    resources: ExitStack, store: ExperimentStore, ledger: BudgetLedger | None
-) -> DispatchJournal | None:
-    if ledger is None:
-        return None
+def _open_journal(resources: ExitStack, store: ExperimentStore) -> DispatchJournal:
     return resources.enter_context(store.dispatch_journal())
 
 
@@ -727,9 +731,11 @@ def _build_indexes(
         recorder = _RecordingEmbeddingProvider(
             session.providers.embedding,
             token_cap=_per_request_token_bound(planned) if planned is not None else 0,
-            mark=_dispatch_marker(
+            mark=_dispatch_gate(
                 session.journal,
+                session.experiment_id,
                 {"embedding_index": entry_id} if entry_id is not None else {},
+                check_cancel=False,
             ),
         )
         try:
@@ -800,7 +806,7 @@ def _coordinate_tasks(tasks: Iterator[_Task], session: _Session) -> StopReason:
                     config,
                     session.providers,
                     caps,
-                    _dispatch_marker(session.journal, claim.entry_ids),
+                    _dispatch_gate(session.journal, session.experiment_id, claim.entry_ids),
                 )
                 pending[future] = claim
 
@@ -856,6 +862,19 @@ def _settle_task(
         records, charges, budget_stopped = _settle_case_embeddings(
             failure.embeddings, claim.reservations, task, session
         )
+        if isinstance(failure.cause, _TaskCancelled):
+            chat_charges = _reconcile_cancelled_reservations(
+                failure, claim.reservations, config, ledger
+            )
+            cost = sum((charge.charged for charge in chat_charges.values()), Decimal("0"))
+            charges.update(chat_charges)
+            session.store.commit_case_outcome(
+                session.experiment_id,
+                _cancelled_case_result(task, config, failure, cost=cost),
+                records,
+                _settlements(claim, charges),
+            )
+            return budget_stopped
         chat_charges = _reconcile_failed_reservations(
             failure, claim.reservations, config, ledger
         )
@@ -909,20 +928,30 @@ def _settlements(claim: _Claim, charges: dict[str, _PhaseCharge]) -> dict[int, S
     }
 
 
-def _dispatch_marker(
-    journal: DispatchJournal | None, entry_ids: dict[str, int]
+def _dispatch_gate(
+    journal: DispatchJournal | None,
+    experiment_id: str,
+    entry_ids: dict[str, int],
+    *,
+    check_cancel: bool = True,
 ) -> DispatchMarker | None:
-    """Return a callback that journals a phase as sent right before its request."""
+    """Return the callback every phase passes right before sending a request.
 
-    if journal is None or not entry_ids:
+    Once cancellation is observed it raises instead, so no phase of any case
+    arm sends another request; otherwise it journals the phase as sent.
+    """
+
+    if journal is None:
         return None
 
-    def mark(phase: str) -> None:
+    def gate(phase: str) -> None:
+        if check_cancel and journal.cancel_requested(experiment_id):
+            raise _TaskCancelled(phase)
         entry_id = entry_ids.get(phase)
         if entry_id is not None:
             journal.mark_dispatched(entry_id)
 
-    return mark
+    return gate
 
 
 def _settle_case_embeddings(
@@ -1203,6 +1232,10 @@ def _evaluate_task(
         raise _TaskFailure(
             "metrics", error.cause, response=response, hits=hits, embeddings=embeddings
         ) from error
+    except _TaskCancelled as cancelled:
+        raise _TaskFailure(
+            "metrics", cancelled, response=response, hits=hits, embeddings=embeddings
+        ) from cancelled
     expected_answerable = task.case.answerability is Answerability.ANSWERABLE
     effective_abstention = is_effective_abstention(
         abstained=response.parsed.abstained,
@@ -1325,6 +1358,36 @@ def _failed_case_result(
     )
 
 
+def _cancelled_case_result(
+    task: _Task, config: ExperimentConfig, failure: _TaskFailure, *, cost: Decimal
+) -> CaseResult:
+    """Record a case arm stopped by cancellation: settled cost, no metrics."""
+
+    response = failure.response
+    return CaseResult(
+        case_id=task.case.id,
+        question=task.case.question,
+        reference_answer=task.case.reference_answer,
+        reference_evidence=task.case.reference_evidence,
+        category=task.case.category,
+        answerability=task.case.answerability,
+        difficulty=task.case.difficulty,
+        config_id=task.config_id,
+        model=config.provider.chat_model,
+        answer=response.parsed if response is not None else None,
+        retrieval_hits=failure.hits,
+        usage=response.usage if response is not None else None,
+        http_request_count=(
+            response.http_request_count if response is not None else 0
+        ),
+        latency_ms=response.latency_ms if response is not None else 0,
+        cost=cost,
+        status="cancelled",
+        failure_phase=failure.phase,
+        error=str(failure.cause),
+    )
+
+
 def _failed_http_request_count(failure: _TaskFailure) -> int | None:
     if failure.phase == "retrieval":
         return 0
@@ -1398,6 +1461,33 @@ def _reconcile_failed_reservations(
     return charges
 
 
+def _reconcile_cancelled_reservations(
+    failure: _TaskFailure,
+    reservations: dict[str, Decimal],
+    config: ExperimentConfig,
+    ledger: BudgetLedger | None,
+) -> dict[str, _PhaseCharge]:
+    """Settle a returned generation and release the phases cancellation skipped."""
+
+    if ledger is None:
+        return {}
+    charges: dict[str, _PhaseCharge] = {}
+    if GENERATION_PHASE in reservations:
+        if failure.response is not None:
+            charged = ledger.settle_many(
+                [reservations[GENERATION_PHASE]],
+                [(config.provider.chat_model, failure.response.usage)],
+            )
+            charges[GENERATION_PHASE] = _PhaseCharge("settled", charged)
+        else:
+            ledger.release_reserved([reservations[GENERATION_PHASE]])
+            charges[GENERATION_PHASE] = _PhaseCharge("released", Decimal("0"))
+    if JUDGE_PHASE in reservations:
+        ledger.release_reserved([reservations[JUDGE_PHASE]])
+        charges[JUDGE_PHASE] = _PhaseCharge("released", Decimal("0"))
+    return charges
+
+
 def _chat_reservations(reservations: dict[str, Decimal]) -> list[Decimal]:
     """Return generation then judge reservations, matching settlement order."""
 
@@ -1421,9 +1511,10 @@ def _summary(
         for result in completed
         if case_by_id[result.case_id].answerability is Answerability.ANSWERABLE
     ]
+    cancelled = [result for result in results if result.status == "cancelled"]
     summary: dict[str, float] = {
         "completed_cases": float(len(completed)),
-        "failure_count": float(len(results) - len(completed)),
+        "failure_count": float(len(results) - len(completed) - len(cancelled)),
         "total_cost": float(sum((result.cost for result in results), Decimal("0"))),
         "mean_latency_ms": _mean([result.latency_ms for result in completed]),
         "p50_latency_ms": _percentile(
@@ -1485,6 +1576,9 @@ def _summary(
             summary["embedding_http_request_count"] = float(
                 sum(count for count in request_counts if count is not None)
             )
+    if cancelled:
+        # Cancelled case arms keep their settled cost but are never scored.
+        summary["cancelled_case_count"] = float(len(cancelled))
     if unknown_calls:
         # Calls sent before a crash but never settled are charged at their cap.
         unknown_cost = sum((call.charged for call in unknown_calls), Decimal("0"))

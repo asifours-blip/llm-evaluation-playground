@@ -71,9 +71,10 @@ EXPERIMENT_LEASE_COLUMNS = {
 
 
 class DispatchJournal:
-    """Thread-safe writer that marks reservations as sent before each request.
+    """Thread-safe gate consulted by worker threads before each request.
 
-    It owns a separate connection so worker threads never share the store's
+    It reads the cancellation flag and marks reservations as sent. It owns a
+    separate connection so worker threads never share the store's
     connection; every mark is committed before the provider call starts.
     """
 
@@ -96,6 +97,14 @@ class DispatchJournal:
     def close(self) -> None:
         with self._lock:
             self.connection.close()
+
+    def cancel_requested(self, experiment_id: str) -> bool:
+        with self._lock:
+            row = self.connection.execute(
+                "SELECT cancel_requested_at FROM experiments WHERE id = ?",
+                (experiment_id,),
+            ).fetchone()
+        return row is not None and row[0] is not None
 
     def mark_dispatched(self, entry_id: int) -> None:
         with self._lock, self.connection:

@@ -114,7 +114,7 @@ rag-quality resume --config configs/live-deepseek.example.yaml --experiment EXPE
 rag-quality cancel --database .ragql/experiments.sqlite3 --experiment EXPERIMENT_ID
 ```
 
-`resume` 只接受 INTERRUPTED 实验；输入与冻结身份不一致时列出变化项并拒绝。已落库的 case-arm 不再请求；unknown 的 case-arm 默认不重发，`--retry-unknown` 重发并另计费用。账本从已花费金额继续，剩余计划须通过「剩余预算」预检，否则拒绝且状态不变。`cancel` 让执行器在领取下一个 case-arm 前停止，进行中的 case-arm 照常结算；对 INTERRUPTED 实验直接置为 CANCELLED。数据库带 `user_version` 版本号：阶段 1 的旧文件打开时自动迁移，更新版本的文件会明确报错。
+`resume` 只接受 INTERRUPTED 实验；输入与冻结身份不一致时列出变化项并拒绝。已落库的 case-arm 不再请求；unknown 的 case-arm 默认不重发，`--retry-unknown` 重发并另计费用。账本从已花费金额继续，剩余计划须通过「剩余预算」预检，否则拒绝且状态不变。`cancel` 之后执行器不再领取新 case-arm，进行中的 case-arm 在派发下一个阶段（查询/答案 embedding、生成、Judge）前也会停下，不再发出任何新请求；已发出的请求照常结算入账，该 case-arm 记为 `cancelled`（不计分、不进 summary 指标，报告的 `cancelled_cases` 与 summary 的 `cancelled_case_count` 单独计数）。对 INTERRUPTED 实验直接置为 CANCELLED。数据库带 `user_version` 版本号：阶段 1 的旧文件打开时自动迁移，更新版本的文件会明确报错。
 
 ## Judge 人工盲标
 
