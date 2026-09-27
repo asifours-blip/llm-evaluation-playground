@@ -51,12 +51,18 @@ ALLOWED_TRANSITIONS: dict[ExperimentStatus, frozenset[ExperimentStatus]] = {
             ExperimentStatus.BUDGET_EXCEEDED,
             ExperimentStatus.CANCELLED,
             ExperimentStatus.INTERRUPTED,
+            ExperimentStatus.INCOMPLETE,
         }
     ),
     ExperimentStatus.INTERRUPTED: frozenset(
         {ExperimentStatus.RUNNING, ExperimentStatus.CANCELLED}
     ),
+    # Re-entering RUNNING from INCOMPLETE requires retrying unknown calls.
+    ExperimentStatus.INCOMPLETE: frozenset(
+        {ExperimentStatus.RUNNING, ExperimentStatus.CANCELLED}
+    ),
 }
+FINISH_STATUSES = TERMINAL_STATUSES | {ExperimentStatus.INCOMPLETE}
 SettledState = Literal["settled", "released"]
 Settlement = tuple[SettledState, Decimal]
 EXPERIMENT_LEASE_COLUMNS = {
@@ -288,7 +294,7 @@ class ExperimentStore:
                     (_utc_now(), experiment_id),
                 )
             return self._status(experiment_id)
-        if status is ExperimentStatus.INTERRUPTED:
+        if status in {ExperimentStatus.INTERRUPTED, ExperimentStatus.INCOMPLETE}:
             self._transition(experiment_id, status, ExperimentStatus.CANCELLED)
             return self._status(experiment_id)
         raise ValueError(f"cannot cancel experiment {experiment_id}: status is {status}")
@@ -302,17 +308,24 @@ class ExperimentStore:
         *,
         owner: ProcessOwner | None = None,
         metadata: dict[str, object] | None = None,
+        retry_unknown: bool = False,
     ) -> int:
-        """Atomically lease an INTERRUPTED experiment to a resumer; return its attempt."""
+        """Atomically lease a resumable experiment to a resumer; return its attempt.
+
+        INTERRUPTED experiments are always resumable; INCOMPLETE ones only
+        when ``retry_unknown`` re-sends their unknown-outcome case arms.
+        """
 
         lease_owner = owner or current_owner()
+        # Both placeholders name INTERRUPTED unless INCOMPLETE is also resumable.
+        resumable = ("interrupted", "incomplete" if retry_unknown else "interrupted")
         with self.connection:
             cursor = self.connection.execute(
                 """
                 UPDATE experiments
                 SET status = 'running', owner_pid = ?, owner_start_marker = ?,
                     owner_host = ?, lease_token = ?, heartbeat_at = ?, finished_at = NULL
-                WHERE id = ? AND status = 'interrupted'
+                WHERE id = ? AND status IN (?, ?)
                 """,
                 (
                     lease_owner.pid,
@@ -321,13 +334,12 @@ class ExperimentStore:
                     str(uuid.uuid4()),
                     _utc_now(),
                     experiment_id,
+                    *resumable,
                 ),
             )
             if cursor.rowcount != 1:
-                status = self._status(experiment_id)
                 raise ValueError(
-                    f"cannot resume experiment {experiment_id}: status is {status}; "
-                    "only interrupted experiments can be resumed"
+                    resume_refusal(experiment_id, self._status(experiment_id))
                 )
             attempt = self.current_attempt(experiment_id) + 1
             self._start_attempt(
@@ -666,8 +678,8 @@ class ExperimentStore:
         *,
         summary: dict[str, float] | None = None,
     ) -> None:
-        if status not in TERMINAL_STATUSES:
-            raise ValueError("experiment can only finish in a terminal status")
+        if status not in FINISH_STATUSES:
+            raise ValueError("experiment can only finish in a terminal or incomplete status")
         current = self._status(experiment_id)
         if current is not ExperimentStatus.RUNNING:
             raise ValueError(f"illegal experiment status transition: {current} -> {status}")
@@ -1082,6 +1094,26 @@ class ExperimentStore:
         if version < SCHEMA_VERSION:
             self.connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
         self.connection.commit()
+
+
+def resume_refusal(experiment_id: str, status: ExperimentStatus) -> str:
+    """Explain why an experiment in ``status`` cannot be resumed as requested."""
+
+    prefix = f"cannot resume experiment {experiment_id}: status is {status}"
+    if status is ExperimentStatus.INCOMPLETE:
+        return (
+            f"{prefix}; its remaining case arms have unknown outcomes. Pass "
+            "--retry-unknown to re-send them at additional cost, or cancel it"
+        )
+    if status is ExperimentStatus.RUNNING:
+        return (
+            f"{prefix} and its owning process is still alive; cancel it or wait "
+            "for it to stop"
+        )
+    return (
+        f"{prefix}; only interrupted experiments, or incomplete ones with "
+        "--retry-unknown, can be resumed"
+    )
 
 
 def _owner_is_gone(row: sqlite3.Row, now: datetime, ttl_seconds: float) -> bool:

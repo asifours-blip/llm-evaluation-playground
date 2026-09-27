@@ -345,11 +345,15 @@ class ExperimentStatus(StrEnum):
 
     RUNNING may become any other state. INTERRUPTED (the owning process
     stopped without finishing) may become RUNNING again through resume, or
-    CANCELLED. COMPLETED, FAILED, BUDGET_EXCEEDED, and CANCELLED are terminal.
+    CANCELLED. INCOMPLETE (every other case arm finished, but some have calls
+    with unknown outcomes) may become RUNNING only through a resume that
+    re-sends those calls, or CANCELLED. COMPLETED, FAILED, BUDGET_EXCEEDED,
+    and CANCELLED are terminal.
     """
 
     RUNNING = "running"
     INTERRUPTED = "interrupted"
+    INCOMPLETE = "incomplete"
     CANCELLED = "cancelled"
     COMPLETED = "completed"
     FAILED = "failed"

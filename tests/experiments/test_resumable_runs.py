@@ -245,7 +245,7 @@ def test_call_killed_before_settlement_is_charged_at_cap_and_not_resent(
     resumed = resume(config, experiment_id, log)
 
     resumed_requests = read_log(log)[len(first_requests) :]
-    assert resumed.status is ExperimentStatus.COMPLETED
+    assert resumed.status is ExperimentStatus.INCOMPLETE
     assert "rag-003" not in {entry["case_id"] for entry in resumed_requests}
     assert {entry["case_id"] for entry in resumed_requests} == {"rag-004", "rag-005"}
     assert "rag-003" not in {case.case_id for case in resumed.case_results}
@@ -253,6 +253,19 @@ def test_call_killed_before_settlement_is_charged_at_cap_and_not_resent(
     assert resumed.summary["unknown_outcome_count"] == 1.0
     assert Decimal(str(resumed.summary["unknown_outcome_cost"])) == unknown_charge
     assert Decimal(str(resumed.summary["total_cost"])) == spent(config, experiment_id)
+
+    request_count = len(read_log(log))
+    with pytest.raises(ResumeRefused, match="--retry-unknown"):
+        resume(config, experiment_id, log)
+    assert len(read_log(log)) == request_count
+    assert status(config, experiment_id) is ExperimentStatus.INCOMPLETE
+
+    retried = resume(config, experiment_id, log, retry_unknown=True)
+
+    assert retried.status is ExperimentStatus.COMPLETED
+    assert {entry["case_id"] for entry in read_log(log)[request_count:]} == {"rag-003"}
+    assert "rag-003" in {case.case_id for case in retried.case_results}
+    assert Decimal(str(retried.summary["total_cost"])) == spent(config, experiment_id)
 
 
 def test_retry_unknown_resends_the_call_and_charges_it_separately(
@@ -374,10 +387,18 @@ def test_restored_budget_allows_only_the_unspent_remainder(tmp_path: Path) -> No
 
     resumed = resume(config, experiment_id, log, generation_completion_tokens=1024)
 
-    assert resumed.status is ExperimentStatus.COMPLETED
+    assert resumed.status is ExperimentStatus.INCOMPLETE
     assert {entry["case_id"] for entry in read_log(log)[request_count:]} == {"rag-005"}
     assert spent(config, experiment_id) == Decimal("1.0")
     assert Decimal(str(resumed.summary["total_cost"])) == Decimal("1.0")
+    with pytest.raises(ResumeRefused, match="budget"):
+        resume(
+            config,
+            experiment_id,
+            log,
+            retry_unknown=True,
+            generation_completion_tokens=1024,
+        )
 
 
 def run_and_cancel_while_blocked(

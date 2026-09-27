@@ -52,6 +52,7 @@ from rag_quality_lab.experiments.store import (
     ExperimentStore,
     SettledState,
     Settlement,
+    resume_refusal,
 )
 from rag_quality_lab.metrics.abstention import (
     AbstentionObservation,
@@ -395,7 +396,7 @@ def resume_experiment(
     with ExperimentStore(config.database_path) as store:
         store.reap_orphans()
         record = store.get_experiment(experiment_id)
-        _require_resumable(experiment_id, record)
+        _require_resumable(experiment_id, record, retry_unknown=retry_unknown)
         changes = identity_changes(record.identity, current)
         if changes:
             raise ResumeRefused(
@@ -450,6 +451,7 @@ def resume_experiment(
         try:
             store.claim_for_resume(
                 experiment_id,
+                retry_unknown=retry_unknown,
                 metadata={
                     **_attempt_metadata(current),
                     "retry_unknown": retry_unknown,
@@ -512,17 +514,14 @@ def identity_changes(
     return changes
 
 
-def _require_resumable(experiment_id: str, record: ExperimentRecord) -> None:
-    if record.status is ExperimentStatus.RUNNING:
-        raise ResumeRefused(
-            f"cannot resume experiment {experiment_id}: status is running and its "
-            "owning process is still alive; cancel it or wait for it to stop"
-        )
-    if record.status is not ExperimentStatus.INTERRUPTED:
-        raise ResumeRefused(
-            f"cannot resume experiment {experiment_id}: status is {record.status}; "
-            "only interrupted experiments can be resumed"
-        )
+def _require_resumable(
+    experiment_id: str, record: ExperimentRecord, *, retry_unknown: bool
+) -> None:
+    resumable = {ExperimentStatus.INTERRUPTED}
+    if retry_unknown:
+        resumable.add(ExperimentStatus.INCOMPLETE)
+    if record.status not in resumable:
+        raise ResumeRefused(resume_refusal(experiment_id, record.status))
     if record.identity.corpus_hash is None or record.identity.prompt_version is None:
         raise ResumeRefused(
             f"cannot resume experiment {experiment_id}: it was recorded before "
@@ -618,9 +617,18 @@ def _finish(
     stop: StopReason,
 ) -> None:
     record = store.get_experiment(experiment_id)
+    status = FINAL_STATUS[stop]
+    unresolved = {
+        call.task_key for call in record.unknown_calls if call.case_id is not None
+    } - {
+        _case_task_key(result.config_id, result.case_id) for result in record.case_results
+    }
+    if status is ExperimentStatus.COMPLETED and unresolved:
+        # Every other case arm finished; unknown outcomes still need a retry.
+        status = ExperimentStatus.INCOMPLETE
     store.finish_experiment(
         experiment_id,
-        FINAL_STATUS[stop],
+        status,
         summary=_summary(
             record.case_results,
             dataset,

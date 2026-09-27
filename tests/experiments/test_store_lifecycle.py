@@ -223,3 +223,19 @@ def test_newer_schema_is_rejected_with_an_explicit_error(tmp_path: Path) -> None
 
     with pytest.raises(ValueError, match="newer"):
         ExperimentStore(database)
+
+
+def test_incomplete_experiment_resumes_only_to_retry_unknown_calls(tmp_path: Path) -> None:
+    with ExperimentStore(tmp_path / "runs.sqlite3") as store:
+        experiment_id = store.create_experiment(identity())
+        store.finish_experiment(experiment_id, ExperimentStatus.INCOMPLETE)
+
+        with pytest.raises(ValueError, match="--retry-unknown"):
+            store.claim_for_resume(experiment_id)
+        store.claim_for_resume(experiment_id, retry_unknown=True)
+        assert store.get_experiment(experiment_id).status is ExperimentStatus.RUNNING
+        store.finish_experiment(experiment_id, ExperimentStatus.INCOMPLETE)
+
+        assert store.request_cancel(experiment_id) is ExperimentStatus.CANCELLED
+        with pytest.raises(ValueError, match="cancelled"):
+            store.claim_for_resume(experiment_id, retry_unknown=True)
