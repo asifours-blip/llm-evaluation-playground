@@ -23,12 +23,14 @@ import yaml
 from rag_quality_lab.config import load_dataset, load_experiment_config
 from rag_quality_lab.domain.models import (
     Answerability,
+    EvaluationDataset,
     ExperimentConfig,
     ExperimentRecord,
     ExperimentStatus,
     PricingConfig,
     StructuredAnswer,
 )
+from rag_quality_lab.experiments import runner as runner_module
 from rag_quality_lab.experiments.budget import planned_call_cost
 from rag_quality_lab.experiments.runner import (
     ProviderBundle,
@@ -565,11 +567,18 @@ class InterruptingChatProvider(FakeChatProvider):
         return super().answer(question, *args, **kwargs)
 
 
-def test_mock_run_interrupted_by_keyboard_resumes_to_the_one_shot_result(
+def mock_inputs(
     tmp_path: Path,
-) -> None:
+) -> tuple[ExperimentConfig, EvaluationDataset, dict[str, StructuredAnswer]]:
     config = load_experiment_config(write_inputs(tmp_path)).model_copy(
         update={"mode": "mock", "pricing_path": None}
+    )
+    config = config.model_copy(
+        update={
+            "provider": config.provider.model_copy(
+                update={"embedding_model": "fake-hash-32", "judge_model": None}
+            )
+        }
     )
     dataset = load_dataset(config.dataset_path)
     answers = {
@@ -580,22 +589,29 @@ def test_mock_run_interrupted_by_keyboard_resumes_to_the_one_shot_result(
         )
         for case in dataset.cases
     }
-    config = config.model_copy(
-        update={
-            "provider": config.provider.model_copy(
-                update={"embedding_model": "fake-hash-32", "judge_model": None}
-            )
-        }
-    )
+    return config, dataset, answers
+
+
+def interrupt_mock_run(
+    config: ExperimentConfig,
+    dataset: EvaluationDataset,
+    answers: dict[str, StructuredAnswer],
+) -> str:
     interrupting = ProviderBundle(
         embedding=FakeEmbeddingProvider(32),
         chat=InterruptingChatProvider(answers, CASES[2]["question"]),
     )
-
     with pytest.raises(KeyboardInterrupt):
         run_experiment(config, interrupting, dataset)
+    return only_experiment_id(config.database_path)
 
-    experiment_id = only_experiment_id(config.database_path)
+
+def test_mock_run_interrupted_by_keyboard_resumes_to_the_one_shot_result(
+    tmp_path: Path,
+) -> None:
+    config, dataset, answers = mock_inputs(tmp_path)
+    experiment_id = interrupt_mock_run(config, dataset, answers)
+
     assert status(config, experiment_id) is ExperimentStatus.INTERRUPTED
     bundle = ProviderBundle(embedding=FakeEmbeddingProvider(32), chat=FakeChatProvider(answers))
     resumed = resume_experiment(experiment_id, config, bundle, dataset)
@@ -609,3 +625,57 @@ def test_mock_run_interrupted_by_keyboard_resumes_to_the_one_shot_result(
     assert comparable_cases(resumed, tmp_path / "a") == comparable_cases(
         one_shot, tmp_path / "b"
     )
+    assert not resumed.mixed_code_versions()
+    assert "code_version_warning" not in json.loads(
+        generate_reports(resumed, tmp_path / "single").json.read_text("utf-8")
+    )
+
+
+def test_results_from_several_commits_are_flagged_in_status_and_report(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    first, second = "a" * 40, "b" * 40
+    config, dataset, answers = mock_inputs(tmp_path)
+    monkeypatch.setattr(runner_module, "_git_identity", lambda: (first, False))
+    experiment_id = interrupt_mock_run(config, dataset, answers)
+    monkeypatch.setattr(runner_module, "_git_identity", lambda: (second, True))
+
+    resumed = resume_experiment(
+        experiment_id,
+        config,
+        ProviderBundle(embedding=FakeEmbeddingProvider(32), chat=FakeChatProvider(answers)),
+        dataset,
+    )
+
+    assert resumed.status is ExperimentStatus.COMPLETED
+    assert [(run.attempt, run.kind, run.commit_sha, run.dirty) for run in resumed.attempts] == [
+        (1, "run", first, False),
+        (2, "resume", second, True),
+    ]
+    assert resumed.mixed_code_versions()
+    paths = generate_reports(resumed, tmp_path / "report")
+    report = json.loads(paths.json.read_text("utf-8"))
+    assert first in report["code_version_warning"] and second in report["code_version_warning"]
+    assert [run["commit_sha"] for run in report["run_attempts"]] == [first, second]
+    assert report["code_version_warning"] in paths.html.read_text("utf-8")
+
+    listed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "rag_quality_lab.cli",
+            "status",
+            "--database",
+            str(config.database_path),
+            "--experiment",
+            experiment_id,
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert listed.returncode == 0, listed.stderr
+    payload = json.loads(listed.stdout)
+    assert payload["code_versions"] == {"mixed": True, "commits": [first, second]}
+    assert [run["commit_sha"] for run in payload["attempts"]] == [first, second]
+    assert payload["warnings"] == [report["code_version_warning"]]

@@ -23,6 +23,7 @@
     summary { cursor:pointer; font-weight:700; }
     pre { white-space:pre-wrap; background:#111827; color:#f9fafb; padding:12px; border-radius:6px; overflow:auto; }
     code { overflow-wrap:anywhere; }
+    .warning { border:2px solid var(--accent); color:var(--accent); background:#fef3f2; border-radius:8px; padding:12px 14px; font-weight:700; overflow-wrap:anywhere; }
   </style>
 </head>
 <body>
@@ -30,6 +31,7 @@
   <span class="badge">{{ report.badge|upper }}</span>
   <h1>RAG Quality Lab</h1>
   <p class="muted">Experiment {{ report.id }} · {{ report.status }}</p>
+  {% if report.code_version_warning %}<p class="warning">Warning: {{ report.code_version_warning }}</p>{% endif %}
 
   <h2>Reproducibility identity</h2>
   <div class="grid">

@@ -23,6 +23,7 @@ from rag_quality_lab.domain.models import (
     ExperimentRecord,
     ExperimentStatus,
     LedgerEntry,
+    RunAttempt,
 )
 from rag_quality_lab.experiments.liveness import (
     DEFAULT_LEASE_TTL_SECONDS,
@@ -543,8 +544,43 @@ class ExperimentStore:
                 "host": row["owner_host"],
                 "heartbeat_at": row["heartbeat_at"],
             },
-            "attempts": self.current_attempt(experiment_id),
+            "attempts": [attempt.model_dump(mode="json") for attempt in record.attempts],
+            "code_versions": {
+                "mixed": record.mixed_code_versions(),
+                "commits": record.code_versions(),
+            },
+            "warnings": [
+                warning for warning in (record.code_version_warning(),) if warning
+            ],
         }
+
+    def run_attempts(self, experiment_id: str) -> list[RunAttempt]:
+        """Return every run and resume attempt with the commit it executed."""
+
+        rows = self.connection.execute(
+            """
+            SELECT attempt, kind, started_at, ended_at, end_status, metadata_json
+            FROM experiment_runs WHERE experiment_id = ? ORDER BY attempt
+            """,
+            (experiment_id,),
+        ).fetchall()
+        attempts: list[RunAttempt] = []
+        for row in rows:
+            metadata = json.loads(row["metadata_json"])
+            commit_sha = metadata.get("commit_sha")
+            dirty = metadata.get("dirty")
+            attempts.append(
+                RunAttempt(
+                    attempt=row["attempt"],
+                    kind=row["kind"],
+                    commit_sha=commit_sha if isinstance(commit_sha, str) else None,
+                    dirty=dirty if isinstance(dirty, bool) else None,
+                    started_at=row["started_at"],
+                    ended_at=row["ended_at"],
+                    end_status=row["end_status"],
+                )
+            )
+        return attempts
 
     def record_artifact(
         self,
@@ -737,6 +773,7 @@ class ExperimentStore:
                 for entry in self.ledger_entries(experiment_id)
                 if entry.state == "unknown"
             ],
+            attempts=self.run_attempts(experiment_id),
         )
 
     def _status(self, experiment_id: str) -> ExperimentStatus:

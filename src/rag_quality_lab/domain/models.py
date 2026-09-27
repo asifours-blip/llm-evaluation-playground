@@ -463,6 +463,18 @@ class LedgerEntry(BaseModel):
     charged: Decimal = Field(default=Decimal("0"), ge=0)
 
 
+class RunAttempt(BaseModel):
+    """One run or resume of an experiment and the code revision that executed it."""
+
+    attempt: int = Field(ge=1)
+    kind: Literal["run", "resume"]
+    commit_sha: str | None = None
+    dirty: bool | None = None
+    started_at: str
+    ended_at: str | None = None
+    end_status: str | None = None
+
+
 class ExperimentRecord(BaseModel):
     """Typed experiment identity, lifecycle, and case outcomes."""
 
@@ -473,3 +485,28 @@ class ExperimentRecord(BaseModel):
     summary: dict[str, float] = Field(default_factory=dict)
     embedding_calls: list[EmbeddingCallRecord] = Field(default_factory=list)
     unknown_calls: list[LedgerEntry] = Field(default_factory=list)
+    attempts: list[RunAttempt] = Field(default_factory=list)
+
+    def code_versions(self) -> list[str]:
+        """Distinct commits that produced the persisted results, in run order."""
+
+        commits: list[str] = []
+        for attempt in self.attempts:
+            if attempt.commit_sha is not None and attempt.commit_sha not in commits:
+                commits.append(attempt.commit_sha)
+        return commits
+
+    def mixed_code_versions(self) -> bool:
+        return len(self.code_versions()) > 1
+
+    def code_version_warning(self) -> str | None:
+        """Explain which attempt ran which commit when results mix code versions."""
+
+        if not self.mixed_code_versions():
+            return None
+        runs = ", ".join(
+            f"attempt {attempt.attempt} ({attempt.kind}) at {attempt.commit_sha}"
+            + (" with uncommitted changes" if attempt.dirty else "")
+            for attempt in self.attempts
+        )
+        return f"results come from multiple code versions: {runs}"

@@ -132,6 +132,15 @@ def _report_payload(
         payload["embedding_calls"] = [
             call.model_dump(mode="json") for call in experiment.embedding_calls
         ]
+    if len(experiment.attempts) > 1:
+        # Additive keys: a resumed experiment lists every attempt's commit and
+        # warns when results were produced by different code versions.
+        payload["run_attempts"] = [
+            attempt.model_dump(mode="json") for attempt in experiment.attempts
+        ]
+    warning = experiment.code_version_warning()
+    if warning is not None:
+        payload["code_version_warning"] = warning
     cancelled = [result for result in results if result.status == "cancelled"]
     if cancelled:
         # Additive key: case arms stopped by cancellation are counted apart
