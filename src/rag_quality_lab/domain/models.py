@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
-from datetime import date
+import hashlib
+import json
+from collections.abc import Iterable, Sequence
+from datetime import date, datetime
 from decimal import Decimal
 from enum import StrEnum
 from pathlib import Path
@@ -42,6 +44,23 @@ CaseCategory = Literal[
     "unsupported_detail",
 ]
 ResponseT = TypeVar("ResponseT")
+DatasetSplit = Literal["dev", "holdout"]
+ReviewStatus = Literal["unreviewed", "approved", "rejected"]
+RetrieverKind = Literal["embedding", "bm25"]
+# Label shown wherever a dataset field was never annotated.
+UNLABELED = "未标注"
+
+
+def canonical_hash(payload: object) -> str:
+    """SHA-256 of canonical (sorted, compact, UTF-8) JSON."""
+
+    canonical = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(canonical.encode()).hexdigest()
 
 
 class Answerability(StrEnum):
@@ -51,8 +70,28 @@ class Answerability(StrEnum):
     UNANSWERABLE = "unanswerable"
 
 
+class CaseReview(BaseModel):
+    """Human review state of one evaluation case."""
+
+    status: ReviewStatus = "unreviewed"
+    reviewer: str | None = Field(default=None, min_length=1)
+    reviewed_at: datetime | None = None
+
+    @model_validator(mode="after")
+    def validate_decision(self) -> Self:
+        if self.status != "unreviewed" and (
+            self.reviewer is None or self.reviewed_at is None
+        ):
+            raise ValueError(f"a {self.status} review requires reviewer and reviewed_at")
+        return self
+
+
 class EvaluationCase(BaseModel):
-    """One question with stable document-level ground truth."""
+    """One question with stable document-level ground truth.
+
+    ``difficulty``, ``split``, and ``review`` are optional so datasets written
+    before they existed still load; an absent value is reported as unlabeled.
+    """
 
     id: str = Field(min_length=1)
     question: str = Field(min_length=1)
@@ -61,8 +100,24 @@ class EvaluationCase(BaseModel):
     expected_document_ids: list[str] = Field(default_factory=list)
     reference_evidence: list[str] = Field(default_factory=list)
     category: CaseCategory
-    difficulty: Difficulty
+    difficulty: Difficulty | None = None
     tags: list[str] = Field(default_factory=list)
+    split: DatasetSplit | None = None
+    review: CaseReview | None = None
+
+    @property
+    def is_unanswerable(self) -> bool:
+        return self.answerability is Answerability.UNANSWERABLE
+
+    def label_values(self) -> dict[str, str]:
+        """Label values for reporting, with absent labels shown as unlabeled."""
+
+        return {
+            "difficulty": self.difficulty or UNLABELED,
+            "answerability": self.answerability.value,
+            "review_status": self.review.status if self.review is not None else UNLABELED,
+            "split": self.split or UNLABELED,
+        }
 
     @model_validator(mode="after")
     def validate_answerability(self) -> Self:
@@ -144,6 +199,42 @@ class EvaluationDataset(BaseModel):
             raise ValueError("dataset case IDs must be unique")
         return self
 
+    def content_hash(self) -> str:
+        """Hash every field of the dataset, including version and labels.
+
+        Unset optional labels are omitted, so a dataset written before labels
+        existed keeps the ``dataset_hash`` it was recorded with.
+        """
+
+        return canonical_hash(self.model_dump(mode="json", exclude_none=True))
+
+    def split_case_ids(self, split: DatasetSplit) -> list[str]:
+        return sorted(case.id for case in self.cases if case.split == split)
+
+    def holdout_hash(self) -> str:
+        """Hash the complete content of every holdout case, ordered by case ID."""
+
+        holdout = sorted(
+            (case for case in self.cases if case.split == "holdout"),
+            key=lambda case: case.id,
+        )
+        return canonical_hash(
+            [case.model_dump(mode="json", exclude_none=True) for case in holdout]
+        )
+
+    def select_splits(self, splits: Sequence[DatasetSplit] | None) -> EvaluationDataset:
+        """Return the cases of ``splits``; ``None`` keeps every case."""
+
+        if splits is None:
+            return self
+        selected = [case for case in self.cases if case.split in splits]
+        if not selected:
+            raise ValueError(
+                f"dataset {self.name} {self.version} has no cases in splits: "
+                + ", ".join(splits)
+            )
+        return self.model_copy(update={"cases": selected})
+
 
 class ProviderConfig(BaseModel):
     """Connection details for an OpenAI-compatible provider."""
@@ -158,21 +249,41 @@ class ProviderConfig(BaseModel):
     max_retries: int = Field(default=2, ge=0, le=5)
     temperature: float = Field(default=0.0, ge=0, le=2)
     top_p: float = Field(default=1.0, gt=0, le=1)
+    # Remote embedding requests carry at most this many texts and this many
+    # upper-bound tokens; None sends each embedding phase in one request.
+    embedding_batch_size: int | None = Field(default=None, ge=1)
+    embedding_batch_token_limit: int | None = Field(default=None, ge=1)
 
 
 class RetrievalConfig(BaseModel):
-    """One retrieval arm in an experiment matrix."""
+    """One retrieval arm in an experiment matrix.
+
+    ``retriever`` selects dense retrieval with ``provider.embedding_model``
+    (the local ``fake-hash`` weak baseline or a remote model) or the local
+    BM25 lexical baseline, which sends no provider request.
+    """
 
     chunk_size: int = Field(gt=0)
     chunk_overlap: int = Field(ge=0)
     top_k: int = Field(gt=0)
     prompt_variant: Literal["direct", "evidence_first"]
+    retriever: RetrieverKind = "embedding"
 
     @model_validator(mode="after")
     def validate_overlap(self) -> Self:
         if self.chunk_overlap >= self.chunk_size:
             raise ValueError("chunk_overlap must be smaller than chunk_size")
         return self
+
+    @property
+    def config_id(self) -> str:
+        """Stable arm identity; embedding arms keep their historical IDs."""
+
+        base = (
+            f"chunk{self.chunk_size}-overlap{self.chunk_overlap}-"
+            f"top{self.top_k}-{self.prompt_variant}"
+        )
+        return base if self.retriever == "embedding" else f"{base}-{self.retriever}"
 
 
 class ModelPrice(BaseModel):
@@ -231,13 +342,12 @@ class ExperimentConfig(BaseModel):
     retrieval: list[RetrievalConfig]
     budget: BudgetConfig
     pricing_path: Path | None = None
+    # Dataset splits to evaluate; None evaluates every case.
+    splits: list[DatasetSplit] | None = Field(default=None, min_length=1)
 
     @model_validator(mode="after")
     def validate_experiment(self) -> Self:
-        retrieval_keys = [
-            (arm.chunk_size, arm.chunk_overlap, arm.top_k, arm.prompt_variant)
-            for arm in self.retrieval
-        ]
+        retrieval_keys = [arm.config_id for arm in self.retrieval]
         if len(retrieval_keys) != len(set(retrieval_keys)):
             raise ValueError("retrieval configurations must be unique")
         if self.mode == "live" and self.pricing_path is None:
@@ -333,6 +443,14 @@ class Chunk(BaseModel):
     end_char: int = Field(default=0, ge=0)
 
 
+class ParameterDifference(BaseModel):
+    """One parameter whose value differs between two compared configurations."""
+
+    path: str
+    baseline: Any = None
+    candidate: Any = None
+
+
 class RetrievalHit(BaseModel):
     """A chunk paired with its query similarity score."""
 
@@ -378,6 +496,10 @@ class ExperimentIdentity(BaseModel):
     corpus_hash: str | None = None
     prompt_version: str | None = None
     pricing_snapshot: dict[str, Any] | None = None
+    # Dataset version and the verified frozen holdout hash; unset before
+    # dataset versioning existed or when the holdout was not frozen.
+    dataset_version: str | None = None
+    holdout_freeze_hash: str | None = None
 
 
 class CaseResult(BaseModel):
@@ -390,6 +512,8 @@ class CaseResult(BaseModel):
     category: str = ""
     answerability: Answerability | None = None
     difficulty: Difficulty | None = None
+    split: DatasetSplit | None = None
+    review_status: ReviewStatus | None = None
     config_id: str
     model: str
     answer: StructuredAnswer | None = None
@@ -430,6 +554,8 @@ class EmbeddingCallRecord(BaseModel):
     phase: EmbeddingPhase
     config_id: str
     case_id: str | None = None
+    batch_index: int = Field(default=0, ge=0)
+    batch_count: int = Field(default=1, ge=1)
     model: str
     text_count: int = Field(ge=0)
     input_token_upper_bound: int = Field(ge=0)
