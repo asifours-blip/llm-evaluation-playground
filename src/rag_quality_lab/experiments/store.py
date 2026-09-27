@@ -210,6 +210,9 @@ class ExperimentStore:
             self._start_attempt(experiment_id, 1, "run", lease_owner, metadata or {})
         return experiment_id
 
+    def created_at(self, experiment_id: str) -> datetime:
+        return datetime.fromisoformat(str(self._row(experiment_id)["created_at"]))
+
     def lease_token(self, experiment_id: str) -> str:
         return str(self._row(experiment_id)["lease_token"] or "")
 

@@ -7,12 +7,13 @@ import importlib.metadata
 import json
 import platform
 import subprocess
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
+from contextlib import ExitStack
 from dataclasses import dataclass, field
 from decimal import Decimal
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from rag_quality_lab.config.loaders import load_yaml_model, validate_dataset_corpus
 from rag_quality_lab.domain.models import (
@@ -29,6 +30,7 @@ from rag_quality_lab.domain.models import (
     ExperimentIdentity,
     ExperimentRecord,
     ExperimentStatus,
+    LedgerEntry,
     PricingConfig,
     ProviderResponse,
     RetrievalConfig,
@@ -44,7 +46,13 @@ from rag_quality_lab.experiments.budget import (
     estimate_tokens_upper_bound,
     preflight_budget,
 )
-from rag_quality_lab.experiments.store import ExperimentStore
+from rag_quality_lab.experiments.liveness import LeaseHeartbeat
+from rag_quality_lab.experiments.store import (
+    DispatchJournal,
+    ExperimentStore,
+    SettledState,
+    Settlement,
+)
 from rag_quality_lab.metrics.abstention import (
     AbstentionObservation,
     is_effective_abstention,
@@ -60,7 +68,7 @@ from rag_quality_lab.metrics.retrieval import (
     recall_at_k,
     reciprocal_rank,
 )
-from rag_quality_lab.prompts.engine import PromptEngine
+from rag_quality_lab.prompts.engine import PROMPT_VERSION, PromptEngine
 from rag_quality_lab.providers.base import (
     ChatProvider,
     EmbeddingProvider,
@@ -87,9 +95,20 @@ from rag_quality_lab.retrieval.index import (
 )
 
 FailurePhase = Literal["retrieval", "generation", "metrics", "judge"]
+StopReason = Literal["budget", "cancelled"] | None
+DispatchMarker = Callable[[str], None]
 GENERATION_PHASE = "generation_with_repair"
 JUDGE_PHASE = "judge_with_repair"
 CASE_EMBEDDING_PHASES: tuple[EmbeddingPhase, ...] = ("embedding_query", "embedding_answer")
+FINAL_STATUS: dict[StopReason, ExperimentStatus] = {
+    None: ExperimentStatus.COMPLETED,
+    "budget": ExperimentStatus.BUDGET_EXCEEDED,
+    "cancelled": ExperimentStatus.CANCELLED,
+}
+
+
+class ResumeRefused(ValueError):
+    """An experiment cannot be resumed; no request was sent and no state changed."""
 
 
 @dataclass(frozen=True)
@@ -172,6 +191,41 @@ class _TaskOutput:
     embeddings: list[_EmbeddingOutcome] = field(default_factory=list)
 
 
+@dataclass(frozen=True)
+class _Claim:
+    """One scheduled task with its in-memory and journaled reservations."""
+
+    task: _Task
+    reservations: dict[str, Decimal]
+    entry_ids: dict[str, int]
+
+
+@dataclass(frozen=True)
+class _PhaseCharge:
+    """Final ledger outcome of one reserved provider phase."""
+
+    state: SettledState
+    charged: Decimal
+    estimated: bool = False
+
+
+@dataclass(frozen=True)
+class _Session:
+    """Everything one run or resume attempt needs to execute and settle tasks."""
+
+    config: ExperimentConfig
+    providers: ProviderBundle
+    dataset: EvaluationDataset
+    documents: Sequence[Document]
+    prompt_engine: PromptEngine
+    store: ExperimentStore
+    experiment_id: str
+    ledger: BudgetLedger | None
+    pricing: PricingConfig | None
+    plan: _LivePlan | None
+    journal: DispatchJournal | None
+
+
 class _EmbeddingCallError(RuntimeError):
     """An embedding failure carrying the observed request outcome."""
 
@@ -208,9 +262,16 @@ class _TaskFailure(RuntimeError):
 class _RecordingEmbeddingProvider:
     """Meter index-build embedding requests and refuse unplanned input."""
 
-    def __init__(self, inner: EmbeddingProvider, *, token_cap: int) -> None:
+    def __init__(
+        self,
+        inner: EmbeddingProvider,
+        *,
+        token_cap: int,
+        mark: DispatchMarker | None = None,
+    ) -> None:
         self.inner = inner
         self.token_cap = token_cap
+        self.mark = mark
         self.cache_identity = embedding_cache_identity(inner)
         self.outcome: _EmbeddingOutcome | None = None
 
@@ -224,6 +285,7 @@ class _RecordingEmbeddingProvider:
                 model=model,
                 phase="embedding_index",
                 token_cap=self.token_cap,
+                mark=self.mark,
             )
         except _EmbeddingCallError as error:
             self.outcome = error.outcome
@@ -240,9 +302,276 @@ def run_experiment(
 
     Live runs create the experiment record and pass the complete buffered
     preflight, including index, query, and answer embeddings, before any
-    provider request is sent.
+    provider request is sent. The record freezes the configuration, dataset,
+    corpus, prompt, and pricing identity so an interrupted run can be resumed
+    with :func:`resume_experiment`.
     """
 
+    _validate_providers(config, providers)
+    documents = load_documents(config.knowledge_base_path)
+    validate_dataset_corpus(dataset, documents)
+    prompt_engine = PromptEngine()
+    pricing = _load_pricing(config)
+    identity = _experiment_identity(config, dataset, prompt_engine, documents, pricing)
+
+    with ExperimentStore(config.database_path) as store:
+        store.reap_orphans()
+        experiment_id = store.create_experiment(
+            identity,
+            planned_task_count=len(dataset.cases) * len(config.retrieval),
+            metadata=_attempt_metadata(identity),
+        )
+        with ExitStack() as resources:
+            _hold_lease(resources, store, experiment_id)
+            try:
+                ledger, plan = _prepare_live_budget(
+                    config, dataset, documents, providers.embedding, pricing
+                )
+                if config.mode == "live" and ledger is None:
+                    store.finish_experiment(
+                        experiment_id,
+                        ExperimentStatus.BUDGET_EXCEEDED,
+                        summary=_summary([], dataset),
+                    )
+                    return store.get_experiment(experiment_id)
+                session = _Session(
+                    config=config,
+                    providers=providers,
+                    dataset=dataset,
+                    documents=documents,
+                    prompt_engine=prompt_engine,
+                    store=store,
+                    experiment_id=experiment_id,
+                    ledger=ledger,
+                    pricing=pricing,
+                    plan=plan,
+                    journal=_open_journal(resources, store, ledger),
+                )
+                stop = _execute(session, skip=set())
+                _finish(store, experiment_id, dataset, stop)
+            except Exception:
+                store.finish_experiment(experiment_id, ExperimentStatus.FAILED)
+                raise
+            except BaseException:
+                store.mark_interrupted(experiment_id)
+                raise
+        return store.get_experiment(experiment_id)
+
+
+def resume_experiment(
+    experiment_id: str,
+    config: ExperimentConfig,
+    providers: ProviderBundle,
+    dataset: EvaluationDataset,
+    *,
+    retry_unknown: bool = False,
+) -> ExperimentRecord:
+    """Continue an INTERRUPTED experiment from its persisted checkpoint.
+
+    The current configuration, dataset, corpus, prompts, and pricing must
+    match the identity frozen when the experiment started. Case arms with a
+    persisted outcome are skipped. Case arms whose calls were sent but never
+    settled are charged at their reservation and skipped unless
+    ``retry_unknown`` is set, in which case they run again and are charged
+    again. The budget ledger continues from the persisted spend, and the
+    remaining plan must pass preflight against the unspent budget.
+    """
+
+    _validate_providers(config, providers)
+    documents = load_documents(config.knowledge_base_path)
+    validate_dataset_corpus(dataset, documents)
+    prompt_engine = PromptEngine()
+    pricing = _load_pricing(config)
+    current = _experiment_identity(config, dataset, prompt_engine, documents, pricing)
+
+    with ExperimentStore(config.database_path) as store:
+        store.reap_orphans()
+        record = store.get_experiment(experiment_id)
+        _require_resumable(experiment_id, record)
+        changes = identity_changes(record.identity, current)
+        if changes:
+            raise ResumeRefused(
+                f"cannot resume experiment {experiment_id}: inputs differ from its "
+                f"frozen identity: {', '.join(changes)}"
+            )
+        done = {
+            _case_task_key(config_id, case_id)
+            for case_id, config_id in store.recorded_case_keys(experiment_id)
+        }
+        unknown = store.unknown_task_keys(experiment_id)
+        skip = done if retry_unknown else done | unknown
+        remaining = [
+            (config_id, case.id)
+            for config_id in (_config_id(retrieval) for retrieval in config.retrieval)
+            for case in dataset.cases
+            if _case_task_key(config_id, case.id) not in skip
+        ]
+        arms = {config_id for config_id, _ in remaining}
+        _refuse_unknown_index_rebuild(
+            experiment_id, config, documents, providers.embedding, arms, unknown, retry_unknown
+        )
+        ledger: BudgetLedger | None = None
+        plan: _LivePlan | None = None
+        if config.mode == "live" and remaining:
+            if pricing is None:
+                raise ValueError("live experiments require a pricing file")
+            spent = store.ledger_spent(experiment_id)
+            plan = _live_plan(
+                config,
+                dataset,
+                documents,
+                providers.embedding,
+                task_count=len(remaining),
+                arms=arms,
+            )
+            decision = preflight_budget(
+                planned=plan.calls(),
+                pricing=pricing,
+                budget=config.budget,
+                on_date=store.created_at(experiment_id).date(),
+                spent=spent,
+            )
+            if not decision.allowed:
+                raise ResumeRefused(
+                    f"cannot resume experiment {experiment_id}: {decision.reason}; "
+                    f"spent {spent} of the {config.budget.hard_limit} "
+                    f"{config.budget.currency} hard budget, remaining plan needs "
+                    f"{decision.buffered_cost} against a threshold of {decision.threshold}"
+                )
+            ledger = BudgetLedger(budget=config.budget, pricing=pricing, spent=spent)
+        try:
+            store.claim_for_resume(
+                experiment_id,
+                metadata={
+                    **_attempt_metadata(current),
+                    "retry_unknown": retry_unknown,
+                },
+            )
+        except ValueError as error:
+            raise ResumeRefused(str(error)) from error
+
+        with ExitStack() as resources:
+            _hold_lease(resources, store, experiment_id)
+            try:
+                stop: StopReason = None
+                if remaining:
+                    session = _Session(
+                        config=config,
+                        providers=providers,
+                        dataset=dataset,
+                        documents=documents,
+                        prompt_engine=prompt_engine,
+                        store=store,
+                        experiment_id=experiment_id,
+                        ledger=ledger,
+                        pricing=pricing,
+                        plan=plan,
+                        journal=_open_journal(resources, store, ledger),
+                    )
+                    stop = _execute(session, skip=skip)
+                _finish(store, experiment_id, dataset, stop)
+            except Exception:
+                store.finish_experiment(experiment_id, ExperimentStatus.FAILED)
+                raise
+            except BaseException:
+                store.mark_interrupted(experiment_id)
+                raise
+        return store.get_experiment(experiment_id)
+
+
+def identity_changes(
+    frozen: ExperimentIdentity, current: ExperimentIdentity
+) -> list[str]:
+    """Name every resume-relevant input that differs from the frozen identity."""
+
+    changes: list[str] = []
+    if frozen.mode != current.mode:
+        changes.append("mode")
+    if frozen.dataset_hash != current.dataset_hash:
+        changes.append("dataset content (dataset_hash)")
+    if frozen.corpus_hash != current.corpus_hash:
+        changes.append("knowledge-base corpus content (corpus_hash)")
+    if (
+        frozen.prompt_version != current.prompt_version
+        or frozen.prompt_hashes != current.prompt_hashes
+    ):
+        changes.append("prompt version or templates (prompt_hashes)")
+    changes.extend(f"config.{path}" for path in _diff_paths(frozen.config, current.config))
+    changes.extend(
+        f"pricing.{path}" if path else "pricing"
+        for path in _diff_paths(frozen.pricing_snapshot, current.pricing_snapshot)
+    )
+    return changes
+
+
+def _require_resumable(experiment_id: str, record: ExperimentRecord) -> None:
+    if record.status is ExperimentStatus.RUNNING:
+        raise ResumeRefused(
+            f"cannot resume experiment {experiment_id}: status is running and its "
+            "owning process is still alive; cancel it or wait for it to stop"
+        )
+    if record.status is not ExperimentStatus.INTERRUPTED:
+        raise ResumeRefused(
+            f"cannot resume experiment {experiment_id}: status is {record.status}; "
+            "only interrupted experiments can be resumed"
+        )
+    if record.identity.corpus_hash is None or record.identity.prompt_version is None:
+        raise ResumeRefused(
+            f"cannot resume experiment {experiment_id}: it was recorded before "
+            "resumable identities existed and has no frozen corpus or pricing snapshot"
+        )
+
+
+def _refuse_unknown_index_rebuild(
+    experiment_id: str,
+    config: ExperimentConfig,
+    documents: Sequence[Document],
+    embedding_provider: EmbeddingProvider,
+    arms: set[str],
+    unknown: set[str],
+    retry_unknown: bool,
+) -> None:
+    """Refuse to silently re-send an index embedding whose outcome is unknown."""
+
+    if retry_unknown:
+        return
+    for retrieval in config.retrieval:
+        config_id = _config_id(retrieval)
+        if config_id not in arms or _index_task_key(config_id) not in unknown:
+            continue
+        if uncached_chunks(
+            _arm_chunks(documents, retrieval),
+            embedding_provider,
+            model=config.provider.embedding_model,
+            cache_path=_embedding_cache_path(config, config_id),
+        ):
+            raise ResumeRefused(
+                f"cannot resume experiment {experiment_id}: the index embedding for "
+                f"{config_id} has an unknown outcome and its cache is incomplete; "
+                "pass --retry-unknown to send it again at additional cost"
+            )
+
+
+def _diff_paths(left: Any, right: Any, prefix: str = "") -> list[str]:
+    if isinstance(left, dict) and isinstance(right, dict):
+        paths: list[str] = []
+        for key in sorted(set(left) | set(right), key=str):
+            path = f"{prefix}.{key}" if prefix else str(key)
+            if key not in left or key not in right:
+                paths.append(path)
+            else:
+                paths.extend(_diff_paths(left[key], right[key], path))
+        return paths
+    if isinstance(left, list) and isinstance(right, list) and len(left) == len(right):
+        return [
+            path
+            for index, (left_item, right_item) in enumerate(zip(left, right, strict=True))
+            for path in _diff_paths(left_item, right_item, f"{prefix}[{index}]")
+        ]
+    return [] if left == right else [prefix]
+
+
+def _validate_providers(config: ExperimentConfig, providers: ProviderBundle) -> None:
     if config.provider.judge_model is not None and providers.judge is None:
         raise ValueError("judge_model requires a judge provider")
     if (
@@ -254,63 +583,75 @@ def run_experiment(
             f"embedding model {config.provider.embedding_model} is planned as a local "
             "embedding, but the embedding provider is not local"
         )
-    documents = load_documents(config.knowledge_base_path)
-    validate_dataset_corpus(dataset, documents)
-    prompt_engine = PromptEngine()
-    identity = _experiment_identity(config, dataset, prompt_engine)
 
-    with ExperimentStore(config.database_path) as store:
-        experiment_id = store.create_experiment(identity)
-        status = ExperimentStatus.COMPLETED
-        try:
-            pricing, ledger, plan = _prepare_live_budget(
-                config, dataset, documents, providers.embedding
-            )
-            if config.mode == "live" and ledger is None:
-                summary = _summary([], dataset)
-                store.finish_experiment(
-                    experiment_id,
-                    ExperimentStatus.BUDGET_EXCEEDED,
-                    summary=summary,
-                )
-                return store.get_experiment(experiment_id)
 
-            indexes = _build_indexes(
-                config,
-                documents,
-                providers.embedding,
-                store=store,
-                experiment_id=experiment_id,
-                ledger=ledger,
-                pricing=pricing,
-                plan=plan,
-            )
-            if indexes is None:
-                budget_stopped = True
-            else:
-                budget_stopped = _coordinate_tasks(
-                    tasks=_tasks(config, dataset, indexes, prompt_engine),
-                    config=config,
-                    providers=providers,
-                    store=store,
-                    experiment_id=experiment_id,
-                    ledger=ledger,
-                    pricing=pricing,
-                    plan=plan,
-                )
-            if budget_stopped:
-                status = ExperimentStatus.BUDGET_EXCEEDED
-            running_record = store.get_experiment(experiment_id)
-            summary = _summary(
-                running_record.case_results,
-                dataset,
-                running_record.embedding_calls,
-            )
-            store.finish_experiment(experiment_id, status, summary=summary)
-        except Exception:
-            store.finish_experiment(experiment_id, ExperimentStatus.FAILED)
-            raise
-        return store.get_experiment(experiment_id)
+def _load_pricing(config: ExperimentConfig) -> PricingConfig | None:
+    if config.pricing_path is None:
+        if config.mode == "live":
+            raise ValueError("live experiments require a pricing file")
+        return None
+    return load_yaml_model(config.pricing_path, PricingConfig)
+
+
+def _hold_lease(resources: ExitStack, store: ExperimentStore, experiment_id: str) -> None:
+    resources.enter_context(
+        LeaseHeartbeat(store.path, experiment_id, store.lease_token(experiment_id))
+    )
+
+
+def _open_journal(
+    resources: ExitStack, store: ExperimentStore, ledger: BudgetLedger | None
+) -> DispatchJournal | None:
+    if ledger is None:
+        return None
+    return resources.enter_context(store.dispatch_journal())
+
+
+def _finish(
+    store: ExperimentStore,
+    experiment_id: str,
+    dataset: EvaluationDataset,
+    stop: StopReason,
+) -> None:
+    record = store.get_experiment(experiment_id)
+    store.finish_experiment(
+        experiment_id,
+        FINAL_STATUS[stop],
+        summary=_summary(
+            record.case_results,
+            dataset,
+            record.embedding_calls,
+            record.unknown_calls,
+        ),
+    )
+
+
+def _attempt_metadata(identity: ExperimentIdentity) -> dict[str, object]:
+    return {
+        "commit_sha": identity.commit_sha,
+        "dirty": identity.dirty,
+        "python_version": identity.python_version,
+    }
+
+
+def _execute(session: _Session, *, skip: set[str]) -> StopReason:
+    """Build the indexes still needed and run every task not in ``skip``."""
+
+    if session.store.cancel_requested(session.experiment_id):
+        return "cancelled"
+    arms = {
+        _config_id(retrieval)
+        for retrieval in session.config.retrieval
+        for case in session.dataset.cases
+        if _case_task_key(_config_id(retrieval), case.id) not in skip
+    }
+    indexes = _build_indexes(session, arms)
+    if indexes is None:
+        return "budget"
+    return _coordinate_tasks(
+        _tasks(session.config, session.dataset, indexes, session.prompt_engine, skip),
+        session,
+    )
 
 
 def _prepare_live_budget(
@@ -318,12 +659,12 @@ def _prepare_live_budget(
     dataset: EvaluationDataset,
     documents: Sequence[Document],
     embedding_provider: EmbeddingProvider,
-) -> tuple[PricingConfig | None, BudgetLedger | None, _LivePlan | None]:
+    pricing: PricingConfig | None,
+) -> tuple[BudgetLedger | None, _LivePlan | None]:
     if config.mode == "mock":
-        return None, None, None
-    if config.pricing_path is None:
+        return None, None
+    if pricing is None:
         raise ValueError("live experiments require a pricing file")
-    pricing = load_yaml_model(config.pricing_path, PricingConfig)
     plan = _live_plan(config, dataset, documents, embedding_provider)
     decision = preflight_budget(
         planned=plan.calls(),
@@ -331,28 +672,28 @@ def _prepare_live_budget(
         budget=config.budget,
     )
     if not decision.allowed:
-        return pricing, None, plan
-    return pricing, BudgetLedger(budget=config.budget, pricing=pricing), plan
+        return None, plan
+    return BudgetLedger(budget=config.budget, pricing=pricing), plan
 
 
 def _build_indexes(
-    config: ExperimentConfig,
-    documents: Sequence[Document],
-    embedding_provider: EmbeddingProvider,
-    *,
-    store: ExperimentStore,
-    experiment_id: str,
-    ledger: BudgetLedger | None,
-    pricing: PricingConfig | None,
-    plan: _LivePlan | None,
+    session: _Session, arms: set[str]
 ) -> dict[str, InMemoryIndex] | None:
-    """Build every arm index; return None when the budget cannot cover it."""
+    """Build the indexes of ``arms``; return None when the budget cannot cover it.
 
+    Chunks whose cache entry matches provider, model, text, and chunking are
+    never embedded again, so a resumed run reuses a verified cached index.
+    """
+
+    config = session.config
+    ledger = session.ledger
+    plan = session.plan
     model = config.provider.embedding_model
     metered = ledger is not None and plan is not None and plan.embedding_caps is not None
     index_reservations: dict[str, Decimal] = {}
+    entry_ids: dict[str, int] = {}
     if metered and ledger is not None and plan is not None and plan.index_embeddings:
-        config_ids = list(plan.index_embeddings)
+        config_ids = [config_id for config_id in plan.index_embeddings if config_id in arms]
         try:
             reserved = ledger.reserve_many(
                 [plan.index_embeddings[config_id] for config_id in config_ids]
@@ -360,21 +701,36 @@ def _build_indexes(
         except BudgetExceeded:
             return None
         index_reservations = dict(zip(config_ids, reserved, strict=True))
+        for config_id, amount in index_reservations.items():
+            entry_ids[config_id] = session.store.reserve_entries(
+                session.experiment_id,
+                task_key=_index_task_key(config_id),
+                config_id=config_id,
+                case_id=None,
+                reservations={"embedding_index": amount},
+            )["embedding_index"]
 
     indexes: dict[str, InMemoryIndex] = {}
     for retrieval in config.retrieval:
         config_id = _config_id(retrieval)
-        chunks = _arm_chunks(documents, retrieval)
+        if config_id not in arms:
+            continue
+        chunks = _arm_chunks(session.documents, retrieval)
         cache_path = _embedding_cache_path(config, config_id)
         if not metered or plan is None:
             indexes[config_id] = InMemoryIndex.from_chunks(
-                chunks, embedding_provider, model=model, cache_path=cache_path
+                chunks, session.providers.embedding, model=model, cache_path=cache_path
             )
             continue
         planned = plan.index_embeddings.get(config_id)
+        entry_id = entry_ids.get(config_id)
         recorder = _RecordingEmbeddingProvider(
-            embedding_provider,
+            session.providers.embedding,
             token_cap=_per_request_token_bound(planned) if planned is not None else 0,
+            mark=_dispatch_marker(
+                session.journal,
+                {"embedding_index": entry_id} if entry_id is not None else {},
+            ),
         )
         try:
             indexes[config_id] = InMemoryIndex.from_chunks(
@@ -387,55 +743,66 @@ def _build_indexes(
                     recorder.outcome,
                     reservation=reservation,
                     ledger=ledger,
-                    pricing=pricing,
+                    pricing=session.pricing,
                     model=model,
                     config_id=config_id,
                     case_id=None,
                 )
-                store.record_embedding_call(experiment_id, record)
+                session.store.commit_embedding_outcome(
+                    session.experiment_id,
+                    record,
+                    (
+                        {
+                            entry_id: (
+                                "settled" if recorder.outcome.dispatched else "released",
+                                record.cost,
+                            )
+                        }
+                        if entry_id is not None
+                        else {}
+                    ),
+                )
             elif reservation is not None and ledger is not None:
                 ledger.release_reserved([reservation])
+                if entry_id is not None:
+                    session.store.settle_entries(
+                        session.experiment_id, {entry_id: ("released", Decimal("0"))}
+                    )
     return indexes
 
 
-def _coordinate_tasks(
-    *,
-    tasks: Iterator[_Task],
-    config: ExperimentConfig,
-    providers: ProviderBundle,
-    store: ExperimentStore,
-    experiment_id: str,
-    ledger: BudgetLedger | None,
-    pricing: PricingConfig | None,
-    plan: _LivePlan | None,
-) -> bool:
-    pending: dict[Future[_TaskOutput], tuple[_Task, dict[str, Decimal]]] = {}
+def _coordinate_tasks(tasks: Iterator[_Task], session: _Session) -> StopReason:
+    """Schedule tasks, checking cancellation before claiming each new one."""
+
+    config = session.config
+    pending: dict[Future[_TaskOutput], _Claim] = {}
     no_more_tasks = False
-    budget_stopped = False
-    caps = plan.embedding_caps if plan is not None else None
+    stop: StopReason = None
+    caps = session.plan.embedding_caps if session.plan is not None else None
     with ThreadPoolExecutor(max_workers=config.max_workers) as executor:
         while pending or not no_more_tasks:
-            while (
-                len(pending) < config.max_workers
-                and not no_more_tasks
-                and not budget_stopped
-            ):
+            while len(pending) < config.max_workers and not no_more_tasks and stop is None:
                 try:
                     task = next(tasks)
                 except StopIteration:
                     no_more_tasks = True
                     break
-                reservations: dict[str, Decimal] = {}
-                if ledger is not None and plan is not None:
-                    case_calls = plan.case_calls()
-                    try:
-                        reserved = ledger.reserve_many(list(case_calls.values()))
-                    except BudgetExceeded:
-                        budget_stopped = True
-                        break
-                    reservations = dict(zip(case_calls, reserved, strict=True))
-                future = executor.submit(_evaluate_task, task, config, providers, caps)
-                pending[future] = (task, reservations)
+                if session.store.cancel_requested(session.experiment_id):
+                    stop = "cancelled"
+                    break
+                claim = _claim(task, session)
+                if claim is None:
+                    stop = "budget"
+                    break
+                future = executor.submit(
+                    _evaluate_task,
+                    task,
+                    config,
+                    session.providers,
+                    caps,
+                    _dispatch_marker(session.journal, claim.entry_ids),
+                )
+                pending[future] = claim
 
             if not pending:
                 break
@@ -443,86 +810,132 @@ def _coordinate_tasks(
             for future in sorted(
                 completed,
                 key=lambda item: (
-                    pending[item][0].case.id,
-                    pending[item][0].config_id,
+                    pending[item].task.case.id,
+                    pending[item].task.config_id,
                 ),
             ):
-                task, reservations = pending.pop(future)
-                try:
-                    output = future.result()
-                    result = output.result
-                    embeddings = output.embeddings
-                except _TaskFailure as failure:
-                    if _record_case_embeddings(
-                        failure.embeddings,
-                        reservations,
-                        task=task,
-                        config=config,
-                        store=store,
-                        experiment_id=experiment_id,
-                        ledger=ledger,
-                        pricing=pricing,
-                    ):
-                        budget_stopped = True
-                    actual_cost, estimated_cost = _reconcile_failed_reservations(
-                        failure,
-                        reservations,
-                        config,
-                        ledger,
-                    )
-                    result = _failed_case_result(
-                        task,
-                        config,
-                        failure,
-                        cost=actual_cost + estimated_cost,
-                        cost_estimated=bool(estimated_cost),
-                    )
-                    store.record_case_result(experiment_id, result)
-                    continue
-                if _record_case_embeddings(
-                    embeddings,
-                    reservations,
-                    task=task,
-                    config=config,
-                    store=store,
-                    experiment_id=experiment_id,
-                    ledger=ledger,
-                    pricing=pricing,
-                ):
-                    budget_stopped = True
-                if ledger is not None and pricing is not None:
-                    call_usages = _result_call_usages(result, config)
-                    try:
-                        actual_cost = ledger.settle_many(
-                            _chat_reservations(reservations), call_usages
-                        )
-                    except BudgetExceeded:
-                        actual_cost = sum(
-                            (
-                                calculate_actual_cost(usage, pricing.models[model])
-                                for model, usage in call_usages
-                            ),
-                            start=Decimal("0"),
-                        )
-                        budget_stopped = True
-                    result = result.model_copy(update={"cost": actual_cost})
-                store.record_case_result(experiment_id, result)
+                claim = pending.pop(future)
+                if _settle_task(future, claim, session) and stop is None:
+                    stop = "budget"
+    return stop
+
+
+def _claim(task: _Task, session: _Session) -> _Claim | None:
+    """Reserve and journal one task's budget; None when the budget is exhausted."""
+
+    if session.ledger is None or session.plan is None:
+        return _Claim(task=task, reservations={}, entry_ids={})
+    case_calls = session.plan.case_calls()
+    try:
+        reserved = session.ledger.reserve_many(list(case_calls.values()))
+    except BudgetExceeded:
+        return None
+    reservations = dict(zip(case_calls, reserved, strict=True))
+    entry_ids = session.store.reserve_entries(
+        session.experiment_id,
+        task_key=_case_task_key(task.config_id, task.case.id),
+        config_id=task.config_id,
+        case_id=task.case.id,
+        reservations=reservations,
+    )
+    return _Claim(task=task, reservations=reservations, entry_ids=entry_ids)
+
+
+def _settle_task(
+    future: Future[_TaskOutput], claim: _Claim, session: _Session
+) -> bool:
+    """Settle one finished task and persist it atomically; True on budget stop."""
+
+    task = claim.task
+    config = session.config
+    ledger = session.ledger
+    pricing = session.pricing
+    try:
+        output = future.result()
+    except _TaskFailure as failure:
+        records, charges, budget_stopped = _settle_case_embeddings(
+            failure.embeddings, claim.reservations, task, session
+        )
+        chat_charges = _reconcile_failed_reservations(
+            failure, claim.reservations, config, ledger
+        )
+        charges.update(chat_charges)
+        cost = sum((charge.charged for charge in chat_charges.values()), Decimal("0"))
+        result = _failed_case_result(
+            task,
+            config,
+            failure,
+            cost=cost,
+            cost_estimated=any(charge.estimated for charge in chat_charges.values()),
+        )
+        session.store.commit_case_outcome(
+            session.experiment_id, result, records, _settlements(claim, charges)
+        )
+        return budget_stopped
+
+    result = output.result
+    records, charges, budget_stopped = _settle_case_embeddings(
+        output.embeddings, claim.reservations, task, session
+    )
+    if ledger is not None and pricing is not None:
+        call_usages = _result_call_usages(result, config)
+        chat_phases = [
+            phase for phase in (GENERATION_PHASE, JUDGE_PHASE) if phase in claim.reservations
+        ]
+        phase_costs = [
+            calculate_actual_cost(usage, pricing.models[model]) for model, usage in call_usages
+        ]
+        try:
+            actual_cost = ledger.settle_many(
+                _chat_reservations(claim.reservations), call_usages
+            )
+        except BudgetExceeded:
+            actual_cost = sum(phase_costs, start=Decimal("0"))
+            budget_stopped = True
+        for phase, phase_cost in zip(chat_phases, phase_costs, strict=True):
+            charges[phase] = _PhaseCharge("settled", phase_cost)
+        result = result.model_copy(update={"cost": actual_cost})
+    session.store.commit_case_outcome(
+        session.experiment_id, result, records, _settlements(claim, charges)
+    )
     return budget_stopped
 
 
-def _record_case_embeddings(
+def _settlements(claim: _Claim, charges: dict[str, _PhaseCharge]) -> dict[int, Settlement]:
+    return {
+        claim.entry_ids[phase]: (charge.state, charge.charged)
+        for phase, charge in charges.items()
+        if phase in claim.entry_ids
+    }
+
+
+def _dispatch_marker(
+    journal: DispatchJournal | None, entry_ids: dict[str, int]
+) -> DispatchMarker | None:
+    """Return a callback that journals a phase as sent right before its request."""
+
+    if journal is None or not entry_ids:
+        return None
+
+    def mark(phase: str) -> None:
+        entry_id = entry_ids.get(phase)
+        if entry_id is not None:
+            journal.mark_dispatched(entry_id)
+
+    return mark
+
+
+def _settle_case_embeddings(
     outcomes: Sequence[_EmbeddingOutcome],
     reservations: dict[str, Decimal],
-    *,
     task: _Task,
-    config: ExperimentConfig,
-    store: ExperimentStore,
-    experiment_id: str,
-    ledger: BudgetLedger | None,
-    pricing: PricingConfig | None,
-) -> bool:
-    """Settle and persist planned per-case embeddings; release unreached ones."""
+    session: _Session,
+) -> tuple[list[EmbeddingCallRecord], dict[str, _PhaseCharge], bool]:
+    """Settle planned per-case embeddings; release unreached ones."""
 
+    ledger = session.ledger
+    records: list[EmbeddingCallRecord] = []
+    charges: dict[str, _PhaseCharge] = {}
     budget_stopped = False
     by_phase = {outcome.phase: outcome for outcome in outcomes}
     for phase in CASE_EMBEDDING_PHASES:
@@ -533,19 +946,25 @@ def _record_case_embeddings(
         if outcome is None:
             if ledger is not None:
                 ledger.release_reserved([reservation])
+            charges[phase] = _PhaseCharge("released", Decimal("0"))
             continue
         record, exceeded = _settle_embedding(
             outcome,
             reservation=reservation,
             ledger=ledger,
-            pricing=pricing,
-            model=config.provider.embedding_model,
+            pricing=session.pricing,
+            model=session.config.provider.embedding_model,
             config_id=task.config_id,
             case_id=task.case.id,
         )
-        store.record_embedding_call(experiment_id, record)
+        records.append(record)
+        charges[phase] = _PhaseCharge(
+            "settled" if outcome.dispatched else "released",
+            record.cost,
+            record.cost_estimated,
+        )
         budget_stopped = budget_stopped or exceeded
-    return budget_stopped
+    return records, charges, budget_stopped
 
 
 def _settle_embedding(
@@ -622,8 +1041,13 @@ def _observed_embed(
     model: str | None,
     phase: EmbeddingPhase,
     token_cap: int | None,
+    mark: DispatchMarker | None = None,
 ) -> tuple[list[list[float]], _EmbeddingOutcome]:
-    """Embed texts within an optional reserved token cap and observe the request."""
+    """Embed texts within an optional reserved token cap and observe the request.
+
+    ``mark`` journals the phase as sent after the cap check and immediately
+    before the provider call, so a refused request is never recorded as sent.
+    """
 
     bound = _embedding_token_bound(texts)
     if token_cap is not None and bound > token_cap:
@@ -640,6 +1064,8 @@ def _observed_embed(
             ),
             cap_error,
         )
+    if mark is not None:
+        mark(phase)
     try:
         if isinstance(provider, MeteredEmbeddingProvider):
             response = provider.embed_with_metadata(texts, model=model)
@@ -687,10 +1113,15 @@ def _tasks(
     dataset: EvaluationDataset,
     indexes: dict[str, InMemoryIndex],
     prompt_engine: PromptEngine,
+    skip: set[str] | None = None,
 ) -> Iterator[_Task]:
+    """Yield case arms in a stable order, skipping checkpointed task keys."""
+
     for retrieval in config.retrieval:
         config_id = _config_id(retrieval)
         for case in dataset.cases:
+            if skip is not None and _case_task_key(config_id, case.id) in skip:
+                continue
             yield _Task(
                 case=case,
                 retrieval=retrieval,
@@ -724,6 +1155,7 @@ def _evaluate_task(
     config: ExperimentConfig,
     providers: ProviderBundle,
     caps: _EmbeddingCaps | None = None,
+    mark: DispatchMarker | None = None,
 ) -> _TaskOutput:
     embeddings: list[_EmbeddingOutcome] = []
     try:
@@ -733,6 +1165,7 @@ def _evaluate_task(
             model=config.provider.embedding_model,
             phase="embedding_query",
             token_cap=caps.query if caps is not None else None,
+            mark=mark,
         )
         embeddings.append(query_outcome)
         hits = task.index.rank(query_vectors[0], top_k=task.retrieval.top_k)
@@ -743,6 +1176,8 @@ def _evaluate_task(
         raise _TaskFailure("retrieval", error, embeddings=embeddings) from error
     contexts = [f"[{hit.chunk.id}]\n{hit.chunk.text}" for hit in hits]
     try:
+        if mark is not None:
+            mark(GENERATION_PHASE)
         response = providers.chat.answer(
             task.case.question,
             contexts,
@@ -760,6 +1195,7 @@ def _evaluate_task(
             model=config.provider.embedding_model,
             phase="embedding_answer",
             token_cap=caps.answer if caps is not None else None,
+            mark=mark,
         )
         embeddings.append(answer_outcome)
     except _EmbeddingCallError as error:
@@ -799,6 +1235,8 @@ def _evaluate_task(
     judge_response = None
     if config.provider.judge_model is not None and providers.judge is not None:
         try:
+            if mark is not None:
+                mark(JUDGE_PHASE)
             judge_response = providers.judge.judge(
                 task.case.question,
                 task.case.reference_answer,
@@ -918,37 +1356,46 @@ def _reconcile_failed_reservations(
     reservations: dict[str, Decimal],
     config: ExperimentConfig,
     ledger: BudgetLedger | None,
-) -> tuple[Decimal, Decimal]:
+) -> dict[str, _PhaseCharge]:
     """Reconcile generation and judge reservations for one failed case."""
 
     if ledger is None:
-        return Decimal("0"), Decimal("0")
-    generation = _chat_reservations(reservations)[:1]
-    remaining = _chat_reservations(reservations)[1:]
-    actual = Decimal("0")
-    estimated = Decimal("0")
+        return {}
+    charges: dict[str, _PhaseCharge] = {}
+
+    def release(phase: str) -> None:
+        if phase in reservations:
+            ledger.release_reserved([reservations[phase]])
+            charges[phase] = _PhaseCharge("released", Decimal("0"))
+
+    def charge_cap(phase: str) -> None:
+        if phase in reservations:
+            charged = ledger.charge_reserved([reservations[phase]])
+            charges[phase] = _PhaseCharge("settled", charged, estimated=True)
+
+    def settle_generation() -> None:
+        if failure.response is None:
+            raise ValueError(f"{failure.phase} failure is missing generation usage")
+        if GENERATION_PHASE in reservations:
+            charged = ledger.settle_many(
+                [reservations[GENERATION_PHASE]],
+                [(config.provider.chat_model, failure.response.usage)],
+            )
+            charges[GENERATION_PHASE] = _PhaseCharge("settled", charged)
+
     if failure.phase == "retrieval":
-        ledger.release_reserved(generation + remaining)
+        release(GENERATION_PHASE)
+        release(JUDGE_PHASE)
     elif failure.phase == "generation":
-        estimated = ledger.charge_reserved(generation)
-        ledger.release_reserved(remaining)
+        charge_cap(GENERATION_PHASE)
+        release(JUDGE_PHASE)
     elif failure.phase == "metrics":
-        if failure.response is None:
-            raise ValueError("metrics failure is missing generation usage")
-        actual = ledger.settle_many(
-            generation,
-            [(config.provider.chat_model, failure.response.usage)],
-        )
-        ledger.release_reserved(remaining)
+        settle_generation()
+        release(JUDGE_PHASE)
     else:
-        if failure.response is None:
-            raise ValueError("judge failure is missing generation usage")
-        actual = ledger.settle_many(
-            generation,
-            [(config.provider.chat_model, failure.response.usage)],
-        )
-        estimated = ledger.charge_reserved(remaining)
-    return actual, estimated
+        settle_generation()
+        charge_cap(JUDGE_PHASE)
+    return charges
 
 
 def _chat_reservations(reservations: dict[str, Decimal]) -> list[Decimal]:
@@ -965,6 +1412,7 @@ def _summary(
     results: Sequence[CaseResult],
     dataset: EvaluationDataset,
     embedding_calls: Sequence[EmbeddingCallRecord] = (),
+    unknown_calls: Sequence[LedgerEntry] = (),
 ) -> dict[str, float]:
     completed = [result for result in results if result.status == "completed"]
     case_by_id = {case.id: case for case in dataset.cases}
@@ -1037,6 +1485,18 @@ def _summary(
             summary["embedding_http_request_count"] = float(
                 sum(count for count in request_counts if count is not None)
             )
+    if unknown_calls:
+        # Calls sent before a crash but never settled are charged at their cap.
+        unknown_cost = sum((call.charged for call in unknown_calls), Decimal("0"))
+        summary["unknown_outcome_count"] = float(
+            len({call.task_key for call in unknown_calls})
+        )
+        summary["unknown_outcome_cost"] = float(unknown_cost)
+        summary["total_cost"] = float(
+            sum((result.cost for result in results), Decimal("0"))
+            + sum((call.cost for call in embedding_calls), Decimal("0"))
+            + unknown_cost
+        )
     judged = [result for result in completed if result.judge is not None]
     if judged:
         summary["judge_mean_score"] = _mean(
@@ -1072,8 +1532,15 @@ def _live_plan(
     dataset: EvaluationDataset,
     documents: Sequence[Document],
     embedding_provider: EmbeddingProvider | None,
+    *,
+    task_count: int | None = None,
+    arms: set[str] | None = None,
 ) -> _LivePlan:
-    case_count = len(dataset.cases) * len(config.retrieval)
+    """Plan capped calls for ``task_count`` case arms and the indexes of ``arms``."""
+
+    case_count = (
+        len(dataset.cases) * len(config.retrieval) if task_count is None else task_count
+    )
     attempts = config.provider.max_retries + 1
     generation = PlannedCall(
         model=config.provider.chat_model,
@@ -1117,6 +1584,8 @@ def _live_plan(
     index_embeddings: dict[str, PlannedCall] = {}
     for retrieval in config.retrieval:
         config_id = _config_id(retrieval)
+        if arms is not None and config_id not in arms:
+            continue
         chunks = _arm_chunks(documents, retrieval)
         if embedding_provider is not None:
             chunks = uncached_chunks(
@@ -1202,6 +1671,8 @@ def _experiment_identity(
     config: ExperimentConfig,
     dataset: EvaluationDataset,
     prompt_engine: PromptEngine,
+    documents: Sequence[Document],
+    pricing: PricingConfig | None,
 ) -> ExperimentIdentity:
     commit_sha, dirty = _git_identity()
     return ExperimentIdentity(
@@ -1215,6 +1686,16 @@ def _experiment_identity(
         random_seed=config.random_seed,
         python_version=platform.python_version(),
         dependency_versions=_dependency_versions(),
+        corpus_hash=_model_hash(
+            [
+                {"id": document.id, "title": document.title, "text": document.text}
+                for document in documents
+            ]
+        ),
+        prompt_version=PROMPT_VERSION,
+        pricing_snapshot=(
+            pricing.model_dump(mode="json") if pricing is not None else None
+        ),
     )
 
 
@@ -1255,6 +1736,16 @@ def _model_hash(payload: object) -> str:
         separators=(",", ":"),
     )
     return hashlib.sha256(canonical.encode()).hexdigest()
+
+
+def _case_task_key(config_id: str, case_id: str) -> str:
+    """Stable checkpoint identity of one case arm."""
+
+    return f"case/{config_id}/{case_id}"
+
+
+def _index_task_key(config_id: str) -> str:
+    return f"index/{config_id}"
 
 
 def _config_id(retrieval: RetrievalConfig) -> str:
