@@ -242,3 +242,39 @@ def test_official_peak_pricing_matches_full_plan_estimate() -> None:
     assert decision.unbuffered_cost == Decimal("12.460464")
     assert decision.buffered_cost == Decimal("15.57558000")
     assert decision.allowed
+
+
+def test_restored_ledger_continues_from_persisted_spend() -> None:
+    budget = BudgetConfig(hard_limit=Decimal("1.00"))
+    ledger = BudgetLedger(budget=budget, pricing=pricing(), spent=Decimal("0.80"))
+    call = PlannedCall(model="pro", input_token_cap=50_000, output_token_cap=0)
+
+    assert ledger.spent == Decimal("0.80")
+    ledger.reserve_many([call])
+    with pytest.raises(BudgetExceeded):
+        ledger.reserve_many([call])
+    with pytest.raises(ValueError, match="spent"):
+        BudgetLedger(budget=budget, pricing=pricing(), spent=Decimal("-0.01"))
+
+
+def test_preflight_after_resume_compares_the_plan_with_the_unspent_budget() -> None:
+    planned = [PlannedCall(model="pro", input_token_cap=50_000, output_token_cap=0)]
+    budget = BudgetConfig(
+        hard_limit=Decimal("1.00"),
+        preflight_fraction=Decimal("1"),
+        safety_multiplier=Decimal("1"),
+    )
+
+    fresh = preflight_budget(planned=planned, pricing=pricing(), budget=budget)
+    resumed = preflight_budget(
+        planned=planned * 2,
+        pricing=pricing(),
+        budget=budget,
+        spent=Decimal("0.80"),
+    )
+
+    assert fresh.allowed
+    assert fresh.threshold == Decimal("1.00")
+    assert not resumed.allowed
+    assert resumed.threshold == Decimal("0.20")
+    assert "remaining" in resumed.reason
