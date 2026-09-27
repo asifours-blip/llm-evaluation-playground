@@ -309,6 +309,8 @@ Rules:
 - judge input is capped at 3,500 estimated tokens and output at 256 tokens;
 - thinking/reasoning mode is disabled unless an experiment explicitly evaluates it;
 - main calls, one structured repair, and every configured retry are reserved explicitly; the resulting estimate is then multiplied by 1.25 for remaining estimation/provider uncertainty;
+- remote embedding calls are planned, reserved, settled, and persisted per phase (`embedding_index`, `embedding_query`, `embedding_answer`); cached chunks are deducted only when the cache entry matches provider, model, chunk text, and chunking; a planned model without an explicit price fails preflight instead of being charged at zero;
+- the experiment record is created before preflight, and no provider request, including index embedding, is sent before preflight passes;
 - no request is sent when the buffered estimate exceeds 90% of the configured budget;
 - actual cost is accumulated from provider usage after each response;
 - scheduling stops before the hard budget is exceeded;

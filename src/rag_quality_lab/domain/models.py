@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from datetime import date
 from decimal import Decimal
 from enum import StrEnum
@@ -196,6 +197,15 @@ class PricingConfig(BaseModel):
     def is_stale(self, on_date: date, max_age_days: int = 7) -> bool:
         return (on_date - self.verified_at).days > max_age_days
 
+    def require_models(self, models: Iterable[str]) -> None:
+        """Reject a plan that uses any model without an explicit price."""
+
+        missing = sorted({model for model in models if model not in self.models})
+        if missing:
+            raise ValueError(
+                "missing price for planned model(s): " + ", ".join(missing)
+            )
+
 
 class BudgetConfig(BaseModel):
     """Hard and preflight spend controls."""
@@ -295,6 +305,15 @@ class ProviderResponse(BaseModel, Generic[ResponseT]):
     raw: dict[str, Any] | None = None
 
 
+class EmbeddingResponse(BaseModel):
+    """Embedding vectors plus observable request metadata."""
+
+    vectors: list[list[float]]
+    model: str | None = None
+    usage: TokenUsage | None = None
+    http_request_count: int | None = Field(default=None, ge=0)
+
+
 class Document(BaseModel):
     """A normalized source document with a stable identity."""
 
@@ -384,6 +403,26 @@ class CaseResult(BaseModel):
         return self
 
 
+EmbeddingPhase = Literal["embedding_index", "embedding_query", "embedding_answer"]
+
+
+class EmbeddingCallRecord(BaseModel):
+    """Persisted outcome of one budgeted live embedding request batch."""
+
+    phase: EmbeddingPhase
+    config_id: str
+    case_id: str | None = None
+    model: str
+    text_count: int = Field(ge=0)
+    input_token_upper_bound: int = Field(ge=0)
+    usage: TokenUsage | None = None
+    http_request_count: int | None = Field(default=None, ge=0)
+    cost: Decimal = Field(default=Decimal("0"), ge=0)
+    cost_estimated: bool = False
+    status: Literal["completed", "failed"]
+    error: str | None = None
+
+
 class ExperimentRecord(BaseModel):
     """Typed experiment identity, lifecycle, and case outcomes."""
 
@@ -392,3 +431,4 @@ class ExperimentRecord(BaseModel):
     status: ExperimentStatus
     case_results: list[CaseResult] = Field(default_factory=list)
     summary: dict[str, float] = Field(default_factory=dict)
+    embedding_calls: list[EmbeddingCallRecord] = Field(default_factory=list)

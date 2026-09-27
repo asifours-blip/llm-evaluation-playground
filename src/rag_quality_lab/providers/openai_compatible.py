@@ -15,6 +15,7 @@ import requests
 from pydantic import ValidationError
 
 from rag_quality_lab.domain.models import (
+    EmbeddingResponse,
     JudgeVerdict,
     PairwiseVerdict,
     ProviderResponse,
@@ -35,6 +36,13 @@ JUDGE_INPUT_TOKEN_CAP = 3500
 JUDGE_OUTPUT_TOKEN_CAP = 256
 MESSAGE_PROTOCOL_TOKEN_ALLOWANCE = 128
 REPAIR_PROMPT_TOKEN_ALLOWANCE = 384
+# Per-text allowance for special tokens an embedding tokenizer may add on top
+# of the UTF-8 byte upper bound.
+EMBEDDING_TEXT_TOKEN_ALLOWANCE = 8
+# Byte cap for a generated answer that is embedded for semantic similarity.
+# Output is capped at GENERATION_OUTPUT_TOKEN_CAP tokens, but tokens have no
+# fixed byte width, so the runner refuses to embed any longer answer.
+GENERATED_ANSWER_EMBEDDING_BYTE_CAP = GENERATION_OUTPUT_TOKEN_CAP * 8
 
 
 class HTTPResponse(Protocol):
@@ -241,6 +249,13 @@ class OpenAICompatibleProvider:
     def embed(
         self, texts: Sequence[str], *, model: str | None = None
     ) -> list[list[float]]:
+        return self.embed_with_metadata(texts, model=model).vectors
+
+    def embed_with_metadata(
+        self, texts: Sequence[str], *, model: str | None = None
+    ) -> EmbeddingResponse:
+        """Embed texts and report provider usage plus physical HTTP attempts."""
+
         if not model:
             raise ValueError("embedding model is required")
         request_counter = _RequestCounter()
@@ -276,7 +291,24 @@ class OpenAICompatibleProvider:
                 "embedding response count does not match input",
                 http_request_count=request_counter.count,
             )
-        return [embedding for _, embedding in ordered]
+        return EmbeddingResponse(
+            vectors=[embedding for _, embedding in ordered],
+            model=model,
+            usage=self._embedding_usage(payload),
+            http_request_count=request_counter.count,
+        )
+
+    @staticmethod
+    def _embedding_usage(payload: dict[str, Any]) -> TokenUsage | None:
+        """Read reported embedding input tokens; unknown usage stays None."""
+
+        usage = payload.get("usage")
+        if not isinstance(usage, dict):
+            return None
+        prompt_tokens = usage.get("prompt_tokens")
+        if not isinstance(prompt_tokens, int) or prompt_tokens < 0:
+            return None
+        return TokenUsage(input_tokens=prompt_tokens, output_tokens=0)
 
     def judge(
         self,

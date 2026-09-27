@@ -49,7 +49,7 @@ versioned config + dataset + Markdown corpus
 - 12 篇文档直接内存暴力余弦检索，不引入向量数据库和部署复杂度。
 - `recall@k`、MRR、context hit 与答案 F1/语义相似度分别汇总，避免生成模型掩盖检索失败。
 - 无答案题单独统计 abstention accuracy、false-answer rate 和 over-abstention rate。
-- Live 请求在发送前执行输入字节上界和 `max_tokens` 硬限制；预检把主调用、一次结构修复和全部配置重试计入 1.25× 安全缓冲，未显式确认或超过 90% 预算阈值时不会发请求。
+- Live 请求在发送前执行输入字节上界和 `max_tokens` 硬限制；预检把主调用、一次结构修复和全部配置重试计入 1.25× 安全缓冲，远程 embedding 的索引、查询、答案三类调用同样进入预检、账本和逐次调用记录。实验记录先于预检创建，未显式确认、计划中任一模型缺少单价或超过 90% 预算阈值时不会发任何请求（包括建索引）。
 - Runner 只在线程池执行 provider 工作，SQLite 由主线程单写；WAL 与 5 秒 busy timeout 支持报告读取。
 - LLM Judge 使用结构化 1–5 分契约；可执行的 pairwise 命令会调用 A/B 与 B/A、持久化位置敏感结果和成本。少于 12 条人工盲标，或一致性不达标时，Judge 指标不得阻断 CI。
 
@@ -98,6 +98,8 @@ rag-quality run --config configs/live-deepseek.example.yaml --confirm-live-run
 ```
 
 预检不读取 API Key、不发网络请求。96-arm 示例为每个生成/Judge 阶段预留主调用、一次结构修复和最多 2 次重试，最坏 1,152 次 HTTP；峰值价未缓冲 `¥10.492416`，1.25× 后 `¥13.115520`。8 配置全矩阵示例见 [384 live 配置](configs/live-deepseek-flash-384.example.yaml)：`max_retries: 0`，预检最坏 1,536 次 HTTP，缓冲后 `¥17.487360`，仍低于 `¥18` 启动阈值和 `¥20` 硬上限。价格会变化，真正运行前必须从[官方价格页](https://api-docs.deepseek.com/zh-cn/quick_start/pricing/)重新核验并新增日期化价格文件；历史证据不覆盖。
+
+示例配置的 `fake-hash-*` embedding 在本地计算、不发请求，因此不进入计划，上述金额不含 embedding。若改用远程 embedding 模型，预检按阶段计划：每个 arm 一次索引批量（仅当缓存条目按 provider、模型、chunk 内容与切分方式校验命中时才扣除；`--preflight-only` 不扣除缓存）、每题一次查询、每题一次答案相似度。价格文件缺少该模型单价时预检直接报错，不会按 0 计费。实际花费按 provider 返回的 usage 结算，usage 缺失或请求失败时按预留上限计入，逐次写入 SQLite `embedding_calls` 表和报告的 `embedding_calls` 字段。
 
 本次零网络结果已固化为 [2026-08-21 live preflight 证据](docs/artifacts/live-preflight-2026-08-21.json)，SHA-256 为 `56aafe9b0d3a9d68043cf200a9bffcda156d671d2e62172408bd34616770514d`。它证明预算与配置可执行，不是模型质量报告；没有 Key 时绝不能把它改名成 `live-final`。
 

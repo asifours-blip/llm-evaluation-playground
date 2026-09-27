@@ -29,6 +29,7 @@ from rag_quality_lab.providers.fake import (
     FakeJudgeProvider,
 )
 from rag_quality_lab.providers.openai_compatible import ProviderError
+from rag_quality_lab.retrieval.index import load_documents
 
 
 class HighUsageChatProvider:
@@ -197,7 +198,7 @@ def experiment_config(tmp_path: Path, *, mode: str = "mock") -> ExperimentConfig
             base_url="https://example.com/v1",
             api_key_env="FAKE_API_KEY",
             chat_model="fake-model",
-            embedding_model="fake-embedding",
+            embedding_model="fake-hash-32",
         ),
         retrieval=[
             RetrievalConfig(
@@ -388,7 +389,11 @@ def test_live_runner_preflights_and_settles_generation_and_judge_costs(
 
     result = run_experiment(config, bundle, scripted_dataset())
 
-    assert len(planned_calls(config, 2)) == 2
+    assert len(
+        planned_calls(
+            config, scripted_dataset(), load_documents(config.knowledge_base_path)
+        )
+    ) == 2
     assert result.status is ExperimentStatus.COMPLETED
     expected_cost = sum(
         case.usage.total_tokens + case.judge_usage.total_tokens

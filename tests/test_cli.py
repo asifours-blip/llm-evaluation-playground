@@ -13,7 +13,11 @@ from rag_quality_lab.metrics.calibration import AnnotationSnapshot, HumanAnnotat
 
 
 def write_cli_fixture(
-    tmp_path: Path, *, mode: str = "mock", with_judge: bool = False
+    tmp_path: Path,
+    *,
+    mode: str = "mock",
+    with_judge: bool = False,
+    embedding_model: str = "fake-hash-64",
 ) -> Path:
     corpus = tmp_path / "knowledge_base"
     corpus.mkdir(parents=True)
@@ -72,7 +76,7 @@ def write_cli_fixture(
             "base_url": "https://example.com/v1",
             "api_key_env": "FAKE_API_KEY",
             "chat_model": "fake-model",
-            "embedding_model": "fake-embedding",
+            "embedding_model": embedding_model,
         },
         "retrieval": [
             {
@@ -140,6 +144,41 @@ def test_live_preflight_includes_generation_and_judge_calls(tmp_path: Path) -> N
     assert [call["requests_per_case"] for call in payload["planned_calls"]] == [6, 6]
     assert payload["pricing_verified_at"] == date.today().isoformat()
     assert payload["pricing_source_url"] == "https://example.com/pricing"
+
+
+def test_live_preflight_plans_remote_embeddings_and_requires_their_price(
+    tmp_path: Path,
+) -> None:
+    config = write_cli_fixture(
+        tmp_path, mode="live", embedding_model="remote-embedding"
+    )
+
+    missing = run_cli("run", "--config", str(config), "--preflight-only")
+
+    assert missing.returncode == 2
+    assert "missing price for planned model(s): remote-embedding" in missing.stderr
+    assert "Traceback" not in missing.stderr
+
+    pricing_path = tmp_path / "pricing.yaml"
+    pricing = yaml.safe_load(pricing_path.read_text(encoding="utf-8"))
+    pricing["models"]["remote-embedding"] = {"input_cache_miss": 1, "output": 0}
+    pricing_path.write_text(yaml.safe_dump(pricing), encoding="utf-8")
+
+    priced = run_cli("run", "--config", str(config), "--preflight-only")
+
+    assert priced.returncode == 0, priced.stderr
+    payload = json.loads(priced.stdout)
+    assert [call["phase"] for call in payload["planned_calls"]] == [
+        "generation_with_repair",
+        "embedding_index",
+        "embedding_query",
+        "embedding_answer",
+    ]
+    assert all(
+        call["model"] == "remote-embedding" and call["output_token_cap"] == 0
+        for call in payload["planned_calls"][1:]
+    )
+    assert payload["total_request_count"] == 6 + 3 + 3 + 3
 
 
 def test_confirmed_live_run_without_key_fails_without_traceback(

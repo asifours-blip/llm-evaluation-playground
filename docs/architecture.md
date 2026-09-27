@@ -79,12 +79,14 @@ SQLite 开启 WAL、foreign keys 和 5 秒 busy timeout。这个设计允许报�
 
 Live 运行的安全链条如下：
 
-1. 读取日期化价格文件，校验币种、模型与价格新鲜度；
+1. 先创建实验记录，再读取日期化价格文件，校验币种、价格新鲜度，以及计划中每个模型（含远程 embedding）都有显式单价；缺价直接报错并把实验标为 `failed`；
 2. 对序列化输入执行保守字节上界、对输出发送 `max_tokens`，并把主调用、一次修复和全部有界重试计入最坏 cache-miss 成本；
 3. 乘安全系数，必须低于硬预算的预检比例；
 4. 用户显式传入 `--confirm-live-run` 后才构造需要 Key 的 provider；
-5. 每个任务调度前原子预留生成与 Judge 的最坏成本，完成后按 provider usage 结算；失败时结算已知 usage，只对已经尝试但 usage 不可得的阶段按预留上限估算；
-6. 完整矩阵的缓冲预检不通过时零请求退出；运行中下一次预留可能越过硬上限时停止调度并持久化 `budget_exceeded`。
+5. 每个任务调度前原子预留生成、Judge 以及远程 embedding 查询/答案的最坏成本，完成后按 provider usage 结算；失败时结算已知 usage，只对已经尝试但 usage 不可得的阶段按预留上限估算；
+6. 完整矩阵的缓冲预检不通过时零请求退出（索引 embedding 也在预检通过后才发出）；运行中下一次预留可能越过硬上限时停止调度并持久化 `budget_exceeded`。
+
+远程 embedding 分三个 phase 计划与记录：`embedding_index`（每个 arm 一次批量，仅扣除按 provider、模型、chunk 内容与切分方式校验命中的缓存）、`embedding_query`（每题一次）和 `embedding_answer`（每题一次；生成答案超过预留字节上限时不发送，该题记为 metrics 失败）。每次批量的 usage、物理 HTTP 次数、成本及是否估算写入 `embedding_calls` 表；索引阶段失败时实验仍保留 `failed` 记录和已发请求数。本地 `fake-hash` embedding 不发请求，不进入计划。
 
 价格证据是历史快照，不覆盖更新。真实运行前必须从官方来源新增当日价格文件。
 

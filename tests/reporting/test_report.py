@@ -8,6 +8,7 @@ import pytest
 from rag_quality_lab.domain.models import (
     CaseResult,
     Chunk,
+    EmbeddingCallRecord,
     ExperimentIdentity,
     ExperimentRecord,
     ExperimentStatus,
@@ -188,3 +189,66 @@ def test_final_report_requires_complete_http_request_evidence(tmp_path: Path) ->
             badge="final",
             calibration=calibration,
         )
+
+
+def test_report_lists_embedding_calls_only_when_recorded(tmp_path: Path) -> None:
+    plain = generate_reports(example_experiment(), tmp_path / "plain")
+    assert "embedding_calls" not in json.loads(plain.json.read_text(encoding="utf-8"))
+
+    experiment = example_experiment().model_copy(
+        update={
+            "embedding_calls": [
+                EmbeddingCallRecord(
+                    phase="embedding_index",
+                    config_id="chunk200-overlap20-top1-direct",
+                    model="remote-embedding",
+                    text_count=1,
+                    input_token_upper_bound=48,
+                    usage=TokenUsage(input_tokens=10, output_tokens=0),
+                    http_request_count=1,
+                    cost=Decimal("0.00001"),
+                    status="completed",
+                )
+            ]
+        }
+    )
+    paths = generate_reports(experiment, tmp_path / "embedded")
+    payload = json.loads(paths.json.read_text(encoding="utf-8"))
+
+    assert [call["phase"] for call in payload["embedding_calls"]] == ["embedding_index"]
+    assert payload["embedding_calls"][0]["http_request_count"] == 1
+
+
+def test_final_report_requires_embedding_http_request_counts(tmp_path: Path) -> None:
+    live = example_experiment().model_copy(
+        update={
+            "identity": example_experiment().identity.model_copy(
+                update={"mode": "live"}
+            ),
+            "embedding_calls": [
+                EmbeddingCallRecord(
+                    phase="embedding_query",
+                    config_id="chunk200-overlap20-top1-direct",
+                    case_id="rag-001",
+                    model="remote-embedding",
+                    text_count=1,
+                    input_token_upper_bound=32,
+                    http_request_count=None,
+                    cost=Decimal("0.00001"),
+                    cost_estimated=True,
+                    status="completed",
+                )
+            ],
+        }
+    )
+    calibration = CalibrationResult(
+        label_count=12,
+        exact_agreement=1,
+        within_one_rate=1,
+        mean_absolute_error=0,
+        blocking_eligible=True,
+        reason="agreement thresholds met",
+    )
+
+    with pytest.raises(ValueError, match="HTTP request"):
+        generate_reports(live, tmp_path, badge="final", calibration=calibration)

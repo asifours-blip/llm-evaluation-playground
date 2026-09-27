@@ -57,6 +57,7 @@ from rag_quality_lab.providers import (
     OpenAICompatibleProvider,
     ProviderError,
 )
+from rag_quality_lab.providers.fake import is_local_embedding_model
 from rag_quality_lab.reporting import generate_reports
 from rag_quality_lab.retrieval.index import load_documents
 
@@ -626,7 +627,7 @@ def _provider_bundle(
     )
     embedding = (
         FakeEmbeddingProvider(_fake_dimensions(config))
-        if config.provider.embedding_model.startswith("fake-hash")
+        if is_local_embedding_model(config.provider.embedding_model)
         else chat
     )
     return ProviderBundle(
@@ -642,7 +643,7 @@ def _live_preflight(
     if config.pricing_path is None:
         raise ValueError("live experiments require a pricing file")
     pricing = load_yaml_model(config.pricing_path, PricingConfig)
-    plan = planned_calls(config, len(dataset.cases) * len(config.retrieval))
+    plan = planned_calls(config, dataset, load_documents(config.knowledge_base_path))
     decision = preflight_budget(
         planned=plan,
         pricing=pricing,

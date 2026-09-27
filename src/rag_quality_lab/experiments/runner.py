@@ -9,15 +9,20 @@ import platform
 import subprocess
 from collections.abc import Iterator, Sequence
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from decimal import Decimal
+from pathlib import Path
 from typing import Literal
 
 from rag_quality_lab.config.loaders import load_yaml_model, validate_dataset_corpus
 from rag_quality_lab.domain.models import (
     Answerability,
     CaseResult,
+    Chunk,
     Document,
+    EmbeddingCallRecord,
+    EmbeddingPhase,
+    EmbeddingResponse,
     EvaluationCase,
     EvaluationDataset,
     ExperimentConfig,
@@ -36,6 +41,7 @@ from rag_quality_lab.experiments.budget import (
     BudgetLedger,
     PlannedCall,
     calculate_actual_cost,
+    estimate_tokens_upper_bound,
     preflight_budget,
 )
 from rag_quality_lab.experiments.store import ExperimentStore
@@ -55,8 +61,16 @@ from rag_quality_lab.metrics.retrieval import (
     reciprocal_rank,
 )
 from rag_quality_lab.prompts.engine import PromptEngine
-from rag_quality_lab.providers.base import ChatProvider, EmbeddingProvider, JudgeProvider
+from rag_quality_lab.providers.base import (
+    ChatProvider,
+    EmbeddingProvider,
+    JudgeProvider,
+    MeteredEmbeddingProvider,
+)
+from rag_quality_lab.providers.fake import FakeEmbeddingProvider, is_local_embedding_model
 from rag_quality_lab.providers.openai_compatible import (
+    EMBEDDING_TEXT_TOKEN_ALLOWANCE,
+    GENERATED_ANSWER_EMBEDDING_BYTE_CAP,
     GENERATION_INPUT_TOKEN_CAP,
     GENERATION_OUTPUT_TOKEN_CAP,
     JUDGE_INPUT_TOKEN_CAP,
@@ -64,9 +78,18 @@ from rag_quality_lab.providers.openai_compatible import (
     REPAIR_PROMPT_TOKEN_ALLOWANCE,
     ProviderError,
 )
-from rag_quality_lab.retrieval.index import InMemoryIndex, chunk_document, load_documents
+from rag_quality_lab.retrieval.index import (
+    InMemoryIndex,
+    chunk_document,
+    embedding_cache_identity,
+    load_documents,
+    uncached_chunks,
+)
 
 FailurePhase = Literal["retrieval", "generation", "metrics", "judge"]
+GENERATION_PHASE = "generation_with_repair"
+JUDGE_PHASE = "judge_with_repair"
+CASE_EMBEDDING_PHASES: tuple[EmbeddingPhase, ...] = ("embedding_query", "embedding_answer")
 
 
 @dataclass(frozen=True)
@@ -88,8 +111,78 @@ class _Task:
 
 
 @dataclass(frozen=True)
+class _EmbeddingOutcome:
+    """One observed embedding request batch, successful or not."""
+
+    phase: EmbeddingPhase
+    text_count: int
+    input_token_upper_bound: int
+    response: EmbeddingResponse | None = None
+    error: Exception | None = None
+    dispatched: bool = True
+
+
+@dataclass(frozen=True)
+class _EmbeddingCaps:
+    """Per-request token upper bounds reserved for each case's live embeddings."""
+
+    query: int
+    answer: int
+
+
+@dataclass(frozen=True)
+class _LivePlan:
+    """Structured live call plan shared by preflight and per-case reservations."""
+
+    generation: PlannedCall
+    judge: PlannedCall | None
+    index_embeddings: dict[str, PlannedCall]
+    query_embedding: PlannedCall | None
+    answer_embedding: PlannedCall | None
+    embedding_caps: _EmbeddingCaps | None
+
+    def calls(self) -> list[PlannedCall]:
+        calls = [self.generation]
+        if self.judge is not None:
+            calls.append(self.judge)
+        calls.extend(self.index_embeddings.values())
+        for call in (self.query_embedding, self.answer_embedding):
+            if call is not None:
+                calls.append(call)
+        return calls
+
+    def case_calls(self) -> dict[str, PlannedCall]:
+        """Return the calls reserved atomically before one case is scheduled."""
+
+        return {
+            call.phase: call.model_copy(update={"count": 1})
+            for call in (
+                self.generation,
+                self.judge,
+                self.query_embedding,
+                self.answer_embedding,
+            )
+            if call is not None
+        }
+
+
+@dataclass(frozen=True)
 class _TaskOutput:
     result: CaseResult
+    embeddings: list[_EmbeddingOutcome] = field(default_factory=list)
+
+
+class _EmbeddingCallError(RuntimeError):
+    """An embedding failure carrying the observed request outcome."""
+
+    def __init__(self, outcome: _EmbeddingOutcome, cause: Exception) -> None:
+        super().__init__(str(cause))
+        self.outcome = outcome
+        self.cause = cause
+
+
+class _EmbeddingCapExceeded(ValueError):
+    """Raised instead of sending embedding input larger than its reservation."""
 
 
 class _TaskFailure(RuntimeError):
@@ -102,12 +195,40 @@ class _TaskFailure(RuntimeError):
         *,
         response: ProviderResponse[StructuredAnswer] | None = None,
         hits: Sequence[RetrievalHit] = (),
+        embeddings: Sequence[_EmbeddingOutcome] = (),
     ) -> None:
         super().__init__(str(cause))
         self.phase = phase
         self.cause = cause
         self.response = response
         self.hits = list(hits)
+        self.embeddings = list(embeddings)
+
+
+class _RecordingEmbeddingProvider:
+    """Meter index-build embedding requests and refuse unplanned input."""
+
+    def __init__(self, inner: EmbeddingProvider, *, token_cap: int) -> None:
+        self.inner = inner
+        self.token_cap = token_cap
+        self.cache_identity = embedding_cache_identity(inner)
+        self.outcome: _EmbeddingOutcome | None = None
+
+    def embed(
+        self, texts: Sequence[str], *, model: str | None = None
+    ) -> list[list[float]]:
+        try:
+            vectors, self.outcome = _observed_embed(
+                self.inner,
+                texts,
+                model=model,
+                phase="embedding_index",
+                token_cap=self.token_cap,
+            )
+        except _EmbeddingCallError as error:
+            self.outcome = error.outcome
+            raise error.cause from error
+        return vectors
 
 
 def run_experiment(
@@ -115,43 +236,76 @@ def run_experiment(
     providers: ProviderBundle,
     dataset: EvaluationDataset,
 ) -> ExperimentRecord:
-    """Run all configured case arms and persist each completed outcome."""
+    """Run all configured case arms and persist each completed outcome.
+
+    Live runs create the experiment record and pass the complete buffered
+    preflight, including index, query, and answer embeddings, before any
+    provider request is sent.
+    """
 
     if config.provider.judge_model is not None and providers.judge is None:
         raise ValueError("judge_model requires a judge provider")
+    if (
+        config.mode == "live"
+        and is_local_embedding_model(config.provider.embedding_model)
+        and not isinstance(providers.embedding, FakeEmbeddingProvider)
+    ):
+        raise ValueError(
+            f"embedding model {config.provider.embedding_model} is planned as a local "
+            "embedding, but the embedding provider is not local"
+        )
     documents = load_documents(config.knowledge_base_path)
     validate_dataset_corpus(dataset, documents)
     prompt_engine = PromptEngine()
     identity = _experiment_identity(config, dataset, prompt_engine)
-    tasks = list(_tasks(config, dataset, documents, providers.embedding, prompt_engine))
 
     with ExperimentStore(config.database_path) as store:
         experiment_id = store.create_experiment(identity)
-        pricing, ledger = _prepare_live_budget(config, tasks)
-        if config.mode == "live" and ledger is None:
-            summary = _summary([], dataset)
-            store.finish_experiment(
-                experiment_id,
-                ExperimentStatus.BUDGET_EXCEEDED,
-                summary=summary,
-            )
-            return store.get_experiment(experiment_id)
-
         status = ExperimentStatus.COMPLETED
         try:
-            budget_stopped = _coordinate_tasks(
-                tasks=iter(tasks),
-                config=config,
-                providers=providers,
+            pricing, ledger, plan = _prepare_live_budget(
+                config, dataset, documents, providers.embedding
+            )
+            if config.mode == "live" and ledger is None:
+                summary = _summary([], dataset)
+                store.finish_experiment(
+                    experiment_id,
+                    ExperimentStatus.BUDGET_EXCEEDED,
+                    summary=summary,
+                )
+                return store.get_experiment(experiment_id)
+
+            indexes = _build_indexes(
+                config,
+                documents,
+                providers.embedding,
                 store=store,
                 experiment_id=experiment_id,
                 ledger=ledger,
                 pricing=pricing,
+                plan=plan,
             )
+            if indexes is None:
+                budget_stopped = True
+            else:
+                budget_stopped = _coordinate_tasks(
+                    tasks=_tasks(config, dataset, indexes, prompt_engine),
+                    config=config,
+                    providers=providers,
+                    store=store,
+                    experiment_id=experiment_id,
+                    ledger=ledger,
+                    pricing=pricing,
+                    plan=plan,
+                )
             if budget_stopped:
                 status = ExperimentStatus.BUDGET_EXCEEDED
             running_record = store.get_experiment(experiment_id)
-            summary = _summary(running_record.case_results, dataset)
+            summary = _summary(
+                running_record.case_results,
+                dataset,
+                running_record.embedding_calls,
+            )
             store.finish_experiment(experiment_id, status, summary=summary)
         except Exception:
             store.finish_experiment(experiment_id, ExperimentStatus.FAILED)
@@ -160,21 +314,88 @@ def run_experiment(
 
 
 def _prepare_live_budget(
-    config: ExperimentConfig, tasks: Sequence[_Task]
-) -> tuple[PricingConfig | None, BudgetLedger | None]:
+    config: ExperimentConfig,
+    dataset: EvaluationDataset,
+    documents: Sequence[Document],
+    embedding_provider: EmbeddingProvider,
+) -> tuple[PricingConfig | None, BudgetLedger | None, _LivePlan | None]:
     if config.mode == "mock":
-        return None, None
+        return None, None, None
     if config.pricing_path is None:
         raise ValueError("live experiments require a pricing file")
     pricing = load_yaml_model(config.pricing_path, PricingConfig)
+    plan = _live_plan(config, dataset, documents, embedding_provider)
     decision = preflight_budget(
-        planned=planned_calls(config, len(tasks)),
+        planned=plan.calls(),
         pricing=pricing,
         budget=config.budget,
     )
     if not decision.allowed:
-        return pricing, None
-    return pricing, BudgetLedger(budget=config.budget, pricing=pricing)
+        return pricing, None, plan
+    return pricing, BudgetLedger(budget=config.budget, pricing=pricing), plan
+
+
+def _build_indexes(
+    config: ExperimentConfig,
+    documents: Sequence[Document],
+    embedding_provider: EmbeddingProvider,
+    *,
+    store: ExperimentStore,
+    experiment_id: str,
+    ledger: BudgetLedger | None,
+    pricing: PricingConfig | None,
+    plan: _LivePlan | None,
+) -> dict[str, InMemoryIndex] | None:
+    """Build every arm index; return None when the budget cannot cover it."""
+
+    model = config.provider.embedding_model
+    metered = ledger is not None and plan is not None and plan.embedding_caps is not None
+    index_reservations: dict[str, Decimal] = {}
+    if metered and ledger is not None and plan is not None and plan.index_embeddings:
+        config_ids = list(plan.index_embeddings)
+        try:
+            reserved = ledger.reserve_many(
+                [plan.index_embeddings[config_id] for config_id in config_ids]
+            )
+        except BudgetExceeded:
+            return None
+        index_reservations = dict(zip(config_ids, reserved, strict=True))
+
+    indexes: dict[str, InMemoryIndex] = {}
+    for retrieval in config.retrieval:
+        config_id = _config_id(retrieval)
+        chunks = _arm_chunks(documents, retrieval)
+        cache_path = _embedding_cache_path(config, config_id)
+        if not metered or plan is None:
+            indexes[config_id] = InMemoryIndex.from_chunks(
+                chunks, embedding_provider, model=model, cache_path=cache_path
+            )
+            continue
+        planned = plan.index_embeddings.get(config_id)
+        recorder = _RecordingEmbeddingProvider(
+            embedding_provider,
+            token_cap=_per_request_token_bound(planned) if planned is not None else 0,
+        )
+        try:
+            indexes[config_id] = InMemoryIndex.from_chunks(
+                chunks, recorder, model=model, cache_path=cache_path
+            )
+        finally:
+            reservation = index_reservations.pop(config_id, None)
+            if recorder.outcome is not None:
+                record, _ = _settle_embedding(
+                    recorder.outcome,
+                    reservation=reservation,
+                    ledger=ledger,
+                    pricing=pricing,
+                    model=model,
+                    config_id=config_id,
+                    case_id=None,
+                )
+                store.record_embedding_call(experiment_id, record)
+            elif reservation is not None and ledger is not None:
+                ledger.release_reserved([reservation])
+    return indexes
 
 
 def _coordinate_tasks(
@@ -186,10 +407,12 @@ def _coordinate_tasks(
     experiment_id: str,
     ledger: BudgetLedger | None,
     pricing: PricingConfig | None,
+    plan: _LivePlan | None,
 ) -> bool:
-    pending: dict[Future[_TaskOutput], tuple[_Task, list[Decimal]]] = {}
+    pending: dict[Future[_TaskOutput], tuple[_Task, dict[str, Decimal]]] = {}
     no_more_tasks = False
     budget_stopped = False
+    caps = plan.embedding_caps if plan is not None else None
     with ThreadPoolExecutor(max_workers=config.max_workers) as executor:
         while pending or not no_more_tasks:
             while (
@@ -202,14 +425,16 @@ def _coordinate_tasks(
                 except StopIteration:
                     no_more_tasks = True
                     break
-                reservations: list[Decimal] = []
-                if ledger is not None:
+                reservations: dict[str, Decimal] = {}
+                if ledger is not None and plan is not None:
+                    case_calls = plan.case_calls()
                     try:
-                        reservations = ledger.reserve_many(_case_planned_calls(config))
+                        reserved = ledger.reserve_many(list(case_calls.values()))
                     except BudgetExceeded:
                         budget_stopped = True
                         break
-                future = executor.submit(_evaluate_task, task, config, providers)
+                    reservations = dict(zip(case_calls, reserved, strict=True))
+                future = executor.submit(_evaluate_task, task, config, providers, caps)
                 pending[future] = (task, reservations)
 
             if not pending:
@@ -226,7 +451,19 @@ def _coordinate_tasks(
                 try:
                     output = future.result()
                     result = output.result
+                    embeddings = output.embeddings
                 except _TaskFailure as failure:
+                    if _record_case_embeddings(
+                        failure.embeddings,
+                        reservations,
+                        task=task,
+                        config=config,
+                        store=store,
+                        experiment_id=experiment_id,
+                        ledger=ledger,
+                        pricing=pricing,
+                    ):
+                        budget_stopped = True
                     actual_cost, estimated_cost = _reconcile_failed_reservations(
                         failure,
                         reservations,
@@ -242,10 +479,23 @@ def _coordinate_tasks(
                     )
                     store.record_case_result(experiment_id, result)
                     continue
+                if _record_case_embeddings(
+                    embeddings,
+                    reservations,
+                    task=task,
+                    config=config,
+                    store=store,
+                    experiment_id=experiment_id,
+                    ledger=ledger,
+                    pricing=pricing,
+                ):
+                    budget_stopped = True
                 if ledger is not None and pricing is not None:
                     call_usages = _result_call_usages(result, config)
                     try:
-                        actual_cost = ledger.settle_many(reservations, call_usages)
+                        actual_cost = ledger.settle_many(
+                            _chat_reservations(reservations), call_usages
+                        )
                     except BudgetExceeded:
                         actual_cost = sum(
                             (
@@ -260,48 +510,237 @@ def _coordinate_tasks(
     return budget_stopped
 
 
+def _record_case_embeddings(
+    outcomes: Sequence[_EmbeddingOutcome],
+    reservations: dict[str, Decimal],
+    *,
+    task: _Task,
+    config: ExperimentConfig,
+    store: ExperimentStore,
+    experiment_id: str,
+    ledger: BudgetLedger | None,
+    pricing: PricingConfig | None,
+) -> bool:
+    """Settle and persist planned per-case embeddings; release unreached ones."""
+
+    budget_stopped = False
+    by_phase = {outcome.phase: outcome for outcome in outcomes}
+    for phase in CASE_EMBEDDING_PHASES:
+        if phase not in reservations:
+            continue
+        reservation = reservations[phase]
+        outcome = by_phase.get(phase)
+        if outcome is None:
+            if ledger is not None:
+                ledger.release_reserved([reservation])
+            continue
+        record, exceeded = _settle_embedding(
+            outcome,
+            reservation=reservation,
+            ledger=ledger,
+            pricing=pricing,
+            model=config.provider.embedding_model,
+            config_id=task.config_id,
+            case_id=task.case.id,
+        )
+        store.record_embedding_call(experiment_id, record)
+        budget_stopped = budget_stopped or exceeded
+    return budget_stopped
+
+
+def _settle_embedding(
+    outcome: _EmbeddingOutcome,
+    *,
+    reservation: Decimal | None,
+    ledger: BudgetLedger | None,
+    pricing: PricingConfig | None,
+    model: str,
+    config_id: str,
+    case_id: str | None,
+) -> tuple[EmbeddingCallRecord, bool]:
+    """Settle one embedding outcome and return its record plus a budget-stop flag."""
+
+    usage = outcome.response.usage if outcome.response is not None else None
+    cost = Decimal("0")
+    estimated = False
+    exceeded = False
+    if ledger is not None and reservation is not None:
+        if not outcome.dispatched:
+            ledger.release_reserved([reservation])
+        elif usage is not None:
+            try:
+                cost = ledger.settle_many([reservation], [(model, usage)])
+            except BudgetExceeded:
+                if pricing is None:
+                    raise
+                cost = calculate_actual_cost(usage, pricing.models[model])
+                exceeded = True
+        else:
+            cost = ledger.charge_reserved([reservation])
+            estimated = True
+    return (
+        EmbeddingCallRecord(
+            phase=outcome.phase,
+            config_id=config_id,
+            case_id=case_id,
+            model=model,
+            text_count=outcome.text_count,
+            input_token_upper_bound=outcome.input_token_upper_bound,
+            usage=usage,
+            http_request_count=_embedding_http_request_count(outcome),
+            cost=cost,
+            cost_estimated=estimated,
+            status="completed" if outcome.error is None else "failed",
+            error=_embedding_error(outcome.error),
+        ),
+        exceeded,
+    )
+
+
+def _embedding_http_request_count(outcome: _EmbeddingOutcome) -> int | None:
+    if not outcome.dispatched:
+        return 0
+    if outcome.response is not None:
+        return outcome.response.http_request_count
+    if isinstance(outcome.error, ProviderError):
+        return outcome.error.http_request_count
+    return None
+
+
+def _embedding_error(error: Exception | None) -> str | None:
+    if error is None:
+        return None
+    if isinstance(error, ProviderError | _EmbeddingCapExceeded):
+        return str(error)
+    return f"{type(error).__name__}: embedding request failed"
+
+
+def _observed_embed(
+    provider: EmbeddingProvider,
+    texts: Sequence[str],
+    *,
+    model: str | None,
+    phase: EmbeddingPhase,
+    token_cap: int | None,
+) -> tuple[list[list[float]], _EmbeddingOutcome]:
+    """Embed texts within an optional reserved token cap and observe the request."""
+
+    bound = _embedding_token_bound(texts)
+    if token_cap is not None and bound > token_cap:
+        cap_error = _EmbeddingCapExceeded(
+            f"{phase} input upper bound {bound} exceeds the reserved cap {token_cap}"
+        )
+        raise _EmbeddingCallError(
+            _EmbeddingOutcome(
+                phase=phase,
+                text_count=len(texts),
+                input_token_upper_bound=bound,
+                error=cap_error,
+                dispatched=False,
+            ),
+            cap_error,
+        )
+    try:
+        if isinstance(provider, MeteredEmbeddingProvider):
+            response = provider.embed_with_metadata(texts, model=model)
+        else:
+            response = EmbeddingResponse(
+                vectors=provider.embed(texts, model=model), model=model
+            )
+    except Exception as error:
+        not_dispatched = (
+            isinstance(error, ProviderError) and error.http_request_count == 0
+        )
+        raise _EmbeddingCallError(
+            _EmbeddingOutcome(
+                phase=phase,
+                text_count=len(texts),
+                input_token_upper_bound=bound,
+                error=error,
+                dispatched=not not_dispatched,
+            ),
+            error,
+        ) from error
+    outcome = _EmbeddingOutcome(
+        phase=phase,
+        text_count=len(texts),
+        input_token_upper_bound=bound,
+        response=response,
+    )
+    if len(response.vectors) != len(texts):
+        count_error = ValueError("embedding provider returned an unexpected vector count")
+        raise _EmbeddingCallError(
+            _EmbeddingOutcome(
+                phase=phase,
+                text_count=len(texts),
+                input_token_upper_bound=bound,
+                response=response,
+                error=count_error,
+            ),
+            count_error,
+        )
+    return response.vectors, outcome
+
+
 def _tasks(
     config: ExperimentConfig,
     dataset: EvaluationDataset,
-    documents: Sequence[Document],
-    embedding_provider: EmbeddingProvider,
+    indexes: dict[str, InMemoryIndex],
     prompt_engine: PromptEngine,
 ) -> Iterator[_Task]:
     for retrieval in config.retrieval:
         config_id = _config_id(retrieval)
-        chunks = [
-            chunk
-            for document in documents
-            for chunk in chunk_document(
-                document.id,
-                document.text,
-                chunk_size=retrieval.chunk_size,
-                chunk_overlap=retrieval.chunk_overlap,
-            )
-        ]
-        index = InMemoryIndex.from_chunks(
-            chunks,
-            embedding_provider,
-            model=config.provider.embedding_model,
-            cache_path=config.artifact_dir / f"{config_id}.embeddings.json",
-        )
         for case in dataset.cases:
             yield _Task(
                 case=case,
                 retrieval=retrieval,
                 config_id=config_id,
-                index=index,
+                index=indexes[config_id],
                 instructions=prompt_engine.instructions(retrieval.prompt_variant),
             )
 
 
+def _arm_chunks(
+    documents: Sequence[Document], retrieval: RetrievalConfig
+) -> list[Chunk]:
+    return [
+        chunk
+        for document in documents
+        for chunk in chunk_document(
+            document.id,
+            document.text,
+            chunk_size=retrieval.chunk_size,
+            chunk_overlap=retrieval.chunk_overlap,
+        )
+    ]
+
+
+def _embedding_cache_path(config: ExperimentConfig, config_id: str) -> Path:
+    return config.artifact_dir / f"{config_id}.embeddings.json"
+
+
 def _evaluate_task(
-    task: _Task, config: ExperimentConfig, providers: ProviderBundle
+    task: _Task,
+    config: ExperimentConfig,
+    providers: ProviderBundle,
+    caps: _EmbeddingCaps | None = None,
 ) -> _TaskOutput:
+    embeddings: list[_EmbeddingOutcome] = []
     try:
-        hits = task.index.search(task.case.question, top_k=task.retrieval.top_k)
+        query_vectors, query_outcome = _observed_embed(
+            providers.embedding,
+            [task.case.question],
+            model=config.provider.embedding_model,
+            phase="embedding_query",
+            token_cap=caps.query if caps is not None else None,
+        )
+        embeddings.append(query_outcome)
+        hits = task.index.rank(query_vectors[0], top_k=task.retrieval.top_k)
+    except _EmbeddingCallError as error:
+        embeddings.append(error.outcome)
+        raise _TaskFailure("retrieval", error.cause, embeddings=embeddings) from error
     except Exception as error:
-        raise _TaskFailure("retrieval", error) from error
+        raise _TaskFailure("retrieval", error, embeddings=embeddings) from error
     contexts = [f"[{hit.chunk.id}]\n{hit.chunk.text}" for hit in hits]
     try:
         response = providers.chat.answer(
@@ -311,14 +750,23 @@ def _evaluate_task(
             instructions=task.instructions,
         )
     except Exception as error:
-        raise _TaskFailure("generation", error, hits=hits) from error
+        raise _TaskFailure(
+            "generation", error, hits=hits, embeddings=embeddings
+        ) from error
     try:
-        answer_vectors = providers.embedding.embed(
+        answer_vectors, answer_outcome = _observed_embed(
+            providers.embedding,
             [response.parsed.answer, task.case.reference_answer],
             model=config.provider.embedding_model,
+            phase="embedding_answer",
+            token_cap=caps.answer if caps is not None else None,
         )
-    except Exception as error:
-        raise _TaskFailure("metrics", error, response=response, hits=hits) from error
+        embeddings.append(answer_outcome)
+    except _EmbeddingCallError as error:
+        embeddings.append(error.outcome)
+        raise _TaskFailure(
+            "metrics", error.cause, response=response, hits=hits, embeddings=embeddings
+        ) from error
     expected_answerable = task.case.answerability is Answerability.ANSWERABLE
     effective_abstention = is_effective_abstention(
         abstained=response.parsed.abstained,
@@ -359,7 +807,9 @@ def _evaluate_task(
                 model=config.provider.judge_model,
             )
         except Exception as error:
-            raise _TaskFailure("judge", error, response=response, hits=hits) from error
+            raise _TaskFailure(
+                "judge", error, response=response, hits=hits, embeddings=embeddings
+            ) from error
         metrics.update(
             {
                 "judge_score": float(judge_response.parsed.score),
@@ -395,7 +845,7 @@ def _evaluate_task(
         ),
         status="completed",
     )
-    return _TaskOutput(result=result)
+    return _TaskOutput(result=result, embeddings=embeddings)
 
 
 def _failed_case_result(
@@ -465,18 +915,20 @@ def _known_http_request_total(*counts: int | None) -> int | None:
 
 def _reconcile_failed_reservations(
     failure: _TaskFailure,
-    reservations: list[Decimal],
+    reservations: dict[str, Decimal],
     config: ExperimentConfig,
     ledger: BudgetLedger | None,
 ) -> tuple[Decimal, Decimal]:
+    """Reconcile generation and judge reservations for one failed case."""
+
     if ledger is None:
         return Decimal("0"), Decimal("0")
-    generation = reservations[:1]
-    remaining = reservations[1:]
+    generation = _chat_reservations(reservations)[:1]
+    remaining = _chat_reservations(reservations)[1:]
     actual = Decimal("0")
     estimated = Decimal("0")
     if failure.phase == "retrieval":
-        ledger.release_reserved(reservations)
+        ledger.release_reserved(generation + remaining)
     elif failure.phase == "generation":
         estimated = ledger.charge_reserved(generation)
         ledger.release_reserved(remaining)
@@ -499,8 +951,20 @@ def _reconcile_failed_reservations(
     return actual, estimated
 
 
+def _chat_reservations(reservations: dict[str, Decimal]) -> list[Decimal]:
+    """Return generation then judge reservations, matching settlement order."""
+
+    return [
+        reservations[phase]
+        for phase in (GENERATION_PHASE, JUDGE_PHASE)
+        if phase in reservations
+    ]
+
+
 def _summary(
-    results: Sequence[CaseResult], dataset: EvaluationDataset
+    results: Sequence[CaseResult],
+    dataset: EvaluationDataset,
+    embedding_calls: Sequence[EmbeddingCallRecord] = (),
 ) -> dict[str, float]:
     completed = [result for result in results if result.status == "completed"]
     case_by_id = {case.id: case for case in dataset.cases}
@@ -563,6 +1027,16 @@ def _summary(
             "over_abstention_rate": abstention.over_abstention_rate,
         }
     )
+    if embedding_calls:
+        case_cost = sum((result.cost for result in results), Decimal("0"))
+        embedding_cost = sum((call.cost for call in embedding_calls), Decimal("0"))
+        summary["embedding_cost"] = float(embedding_cost)
+        summary["total_cost"] = float(case_cost + embedding_cost)
+        request_counts = [call.http_request_count for call in embedding_calls]
+        if all(count is not None for count in request_counts):
+            summary["embedding_http_request_count"] = float(
+                sum(count for count in request_counts if count is not None)
+            )
     judged = [result for result in completed if result.judge is not None]
     if judged:
         summary["judge_mean_score"] = _mean(
@@ -574,46 +1048,139 @@ def _summary(
     return summary
 
 
-def planned_calls(config: ExperimentConfig, case_count: int) -> list[PlannedCall]:
-    """Return every capped provider call included in one experiment plan."""
+def planned_calls(
+    config: ExperimentConfig,
+    dataset: EvaluationDataset,
+    documents: Sequence[Document],
+    *,
+    embedding_provider: EmbeddingProvider | None = None,
+) -> list[PlannedCall]:
+    """Return every capped provider call included in one experiment plan.
 
+    Remote embedding calls are planned per phase: one index batch per arm,
+    one query batch per case, and one answer batch per case. Without an
+    ``embedding_provider`` every chunk is counted; with one, only chunks
+    whose cache entry matches provider, model, text, and chunking are deducted.
+    The local ``fake-hash`` embedding sends no requests and is not planned.
+    """
+
+    return _live_plan(config, dataset, documents, embedding_provider).calls()
+
+
+def _live_plan(
+    config: ExperimentConfig,
+    dataset: EvaluationDataset,
+    documents: Sequence[Document],
+    embedding_provider: EmbeddingProvider | None,
+) -> _LivePlan:
+    case_count = len(dataset.cases) * len(config.retrieval)
     attempts = config.provider.max_retries + 1
-    calls = [
-        PlannedCall(
-            model=config.provider.chat_model,
+    generation = PlannedCall(
+        model=config.provider.chat_model,
+        input_token_cap=(
+            GENERATION_INPUT_TOKEN_CAP
+            + GENERATION_OUTPUT_TOKEN_CAP
+            + REPAIR_PROMPT_TOKEN_ALLOWANCE
+        )
+        * attempts,
+        output_token_cap=GENERATION_OUTPUT_TOKEN_CAP * 2 * attempts,
+        count=case_count,
+        phase=GENERATION_PHASE,
+        requests_per_case=2 * attempts,
+    )
+    judge = None
+    if config.provider.judge_model is not None:
+        judge = PlannedCall(
+            model=config.provider.judge_model,
             input_token_cap=(
-                GENERATION_INPUT_TOKEN_CAP
-                + GENERATION_OUTPUT_TOKEN_CAP
+                JUDGE_INPUT_TOKEN_CAP
+                + JUDGE_OUTPUT_TOKEN_CAP
                 + REPAIR_PROMPT_TOKEN_ALLOWANCE
             )
             * attempts,
-            output_token_cap=GENERATION_OUTPUT_TOKEN_CAP * 2 * attempts,
+            output_token_cap=JUDGE_OUTPUT_TOKEN_CAP * 2 * attempts,
             count=case_count,
-            phase="generation_with_repair",
+            phase=JUDGE_PHASE,
             requests_per_case=2 * attempts,
         )
-    ]
-    if config.provider.judge_model is not None:
-        calls.append(
-            PlannedCall(
-                model=config.provider.judge_model,
-                input_token_cap=(
-                    JUDGE_INPUT_TOKEN_CAP
-                    + JUDGE_OUTPUT_TOKEN_CAP
-                    + REPAIR_PROMPT_TOKEN_ALLOWANCE
-                )
-                * attempts,
-                output_token_cap=JUDGE_OUTPUT_TOKEN_CAP * 2 * attempts,
-                count=case_count,
-                phase="judge_with_repair",
-                requests_per_case=2 * attempts,
-            )
+    model = config.provider.embedding_model
+    if is_local_embedding_model(model):
+        return _LivePlan(
+            generation=generation,
+            judge=judge,
+            index_embeddings={},
+            query_embedding=None,
+            answer_embedding=None,
+            embedding_caps=None,
         )
-    return calls
+
+    index_embeddings: dict[str, PlannedCall] = {}
+    for retrieval in config.retrieval:
+        config_id = _config_id(retrieval)
+        chunks = _arm_chunks(documents, retrieval)
+        if embedding_provider is not None:
+            chunks = uncached_chunks(
+                chunks,
+                embedding_provider,
+                model=model,
+                cache_path=_embedding_cache_path(config, config_id),
+            )
+        if chunks:
+            index_embeddings[config_id] = PlannedCall(
+                model=model,
+                input_token_cap=_embedding_token_bound([chunk.text for chunk in chunks])
+                * attempts,
+                output_token_cap=0,
+                count=1,
+                phase="embedding_index",
+                requests_per_case=attempts,
+            )
+    caps = _EmbeddingCaps(
+        query=max(_embedding_token_bound([case.question]) for case in dataset.cases),
+        answer=max(
+            GENERATED_ANSWER_EMBEDDING_BYTE_CAP
+            + EMBEDDING_TEXT_TOKEN_ALLOWANCE
+            + _embedding_token_bound([case.reference_answer])
+            for case in dataset.cases
+        ),
+    )
+    return _LivePlan(
+        generation=generation,
+        judge=judge,
+        index_embeddings=index_embeddings,
+        query_embedding=PlannedCall(
+            model=model,
+            input_token_cap=caps.query * attempts,
+            output_token_cap=0,
+            count=case_count,
+            phase="embedding_query",
+            requests_per_case=attempts,
+        ),
+        answer_embedding=PlannedCall(
+            model=model,
+            input_token_cap=caps.answer * attempts,
+            output_token_cap=0,
+            count=case_count,
+            phase="embedding_answer",
+            requests_per_case=attempts,
+        ),
+        embedding_caps=caps,
+    )
 
 
-def _case_planned_calls(config: ExperimentConfig) -> list[PlannedCall]:
-    return planned_calls(config, 1)
+def _embedding_token_bound(texts: Sequence[str]) -> int:
+    """Conservative token upper bound for one embedding request."""
+
+    return sum(
+        estimate_tokens_upper_bound(text) + EMBEDDING_TEXT_TOKEN_ALLOWANCE
+        for text in texts
+    )
+
+
+def _per_request_token_bound(call: PlannedCall) -> int:
+    """Undo the retry multiplier applied to a planned embedding input cap."""
+
+    return call.input_token_cap // call.requests_per_case
 
 
 def _result_call_usages(

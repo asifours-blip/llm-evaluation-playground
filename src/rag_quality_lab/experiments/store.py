@@ -13,6 +13,7 @@ from pydantic import BaseModel
 
 from rag_quality_lab.domain.models import (
     CaseResult,
+    EmbeddingCallRecord,
     ExperimentIdentity,
     ExperimentRecord,
     ExperimentStatus,
@@ -147,6 +148,31 @@ class ExperimentStore:
             if "UNIQUE" in str(error).upper():
                 raise ValueError("duplicate case result") from error
             raise
+
+    def record_embedding_call(
+        self, experiment_id: str, record: EmbeddingCallRecord
+    ) -> None:
+        """Persist one budgeted live embedding request batch."""
+
+        self._require_running(experiment_id)
+        with self.connection:
+            self.connection.execute(
+                """
+                INSERT INTO embedding_calls(
+                    experiment_id, phase, config_id, case_id, status,
+                    payload_json, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    experiment_id,
+                    record.phase,
+                    record.config_id,
+                    record.case_id,
+                    record.status,
+                    _canonical_json(record),
+                    _utc_now(),
+                ),
+            )
 
     def completed_case_keys(self, experiment_id: str) -> set[tuple[str, str, str]]:
         rows = self.connection.execute(
@@ -323,6 +349,14 @@ class ExperimentStore:
             """,
             (experiment_id,),
         ).fetchall()
+        embedding_rows = self.connection.execute(
+            """
+            SELECT payload_json FROM embedding_calls
+            WHERE experiment_id = ?
+            ORDER BY id
+            """,
+            (experiment_id,),
+        ).fetchall()
         return ExperimentRecord(
             id=experiment_id,
             identity=ExperimentIdentity.model_validate_json(row["identity_json"]),
@@ -332,6 +366,10 @@ class ExperimentStore:
                 for result_row in result_rows
             ],
             summary=json.loads(row["summary_json"]),
+            embedding_calls=[
+                EmbeddingCallRecord.model_validate_json(embedding_row["payload_json"])
+                for embedding_row in embedding_rows
+            ],
         )
 
     def _status(self, experiment_id: str) -> ExperimentStatus:
@@ -414,6 +452,17 @@ class ExperimentStore:
                 sample_id TEXT NOT NULL,
                 payload_json TEXT NOT NULL,
                 UNIQUE(experiment_id, sample_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS embedding_calls (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                experiment_id TEXT NOT NULL REFERENCES experiments(id) ON DELETE CASCADE,
+                phase TEXT NOT NULL,
+                config_id TEXT NOT NULL,
+                case_id TEXT,
+                status TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                created_at TEXT NOT NULL
             );
 
             CREATE TABLE IF NOT EXISTS pairwise_comparisons (

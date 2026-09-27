@@ -89,7 +89,9 @@ def _validate_final_evidence(
         raise ValueError("final evidence requires a clean git identity")
     if any(result.status != "completed" for result in experiment.case_results):
         raise ValueError("final evidence cannot contain failed cases")
-    if any(result.http_request_count is None for result in experiment.case_results):
+    if any(result.http_request_count is None for result in experiment.case_results) or any(
+        call.http_request_count is None for call in experiment.embedding_calls
+    ):
         raise ValueError("final evidence requires complete HTTP request counts")
     if calibration is None or not calibration.blocking_eligible:
         raise ValueError("final evidence requires eligible human judge calibration")
@@ -106,7 +108,7 @@ def _report_payload(
     failures = [
         result.model_dump(mode="json") for result in results if result.status != "completed"
     ]
-    return {
+    payload: dict[str, Any] = {
         "id": experiment.id,
         "status": experiment.status.value,
         "badge": badge,
@@ -123,6 +125,12 @@ def _report_payload(
             calibration.model_dump(mode="json") if calibration is not None else None
         ),
     }
+    if experiment.embedding_calls:
+        # Additive key: reports without remote embedding calls keep their shape.
+        payload["embedding_calls"] = [
+            call.model_dump(mode="json") for call in experiment.embedding_calls
+        ]
+    return payload
 
 
 def _system_metrics(

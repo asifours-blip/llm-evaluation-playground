@@ -4,6 +4,7 @@ from rag_quality_lab.config import load_dataset, load_experiment_config, load_ya
 from rag_quality_lab.domain.models import PricingConfig
 from rag_quality_lab.experiments import preflight_budget
 from rag_quality_lab.experiments.runner import planned_calls
+from rag_quality_lab.retrieval.index import load_documents
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -16,7 +17,9 @@ def test_strict_judge_live_configuration_stays_under_budget() -> None:
     assert config.pricing_path is not None
     pricing = load_yaml_model(config.pricing_path, PricingConfig)
     decision = preflight_budget(
-        planned=planned_calls(config, len(dataset.cases) * len(config.retrieval)),
+        planned=planned_calls(
+            config, dataset, load_documents(config.knowledge_base_path)
+        ),
         pricing=pricing,
         budget=config.budget,
         on_date=pricing.verified_at,
@@ -34,7 +37,7 @@ def test_384_live_configuration_stays_under_budget() -> None:
     assert len(config.retrieval) == 8
     assert config.provider.max_retries == 0
     assert config.pricing_path is not None
-    plan = planned_calls(config, len(dataset.cases) * len(config.retrieval))
+    plan = planned_calls(config, dataset, load_documents(config.knowledge_base_path))
     pricing = load_yaml_model(config.pricing_path, PricingConfig)
     decision = preflight_budget(
         planned=plan,

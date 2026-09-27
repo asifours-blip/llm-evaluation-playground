@@ -82,6 +82,7 @@ def preflight_budget(
 
     if pricing.currency != budget.currency:
         raise ValueError("budget and pricing currency must match")
+    pricing.require_models(call.model for call in planned)
     unbuffered = sum(
         (planned_call_cost(call, pricing) for call in planned), start=Decimal("0")
     )
