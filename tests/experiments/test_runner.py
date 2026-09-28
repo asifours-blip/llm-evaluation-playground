@@ -1,8 +1,11 @@
 from collections.abc import Sequence
 from datetime import date
+from decimal import Decimal
 from pathlib import Path
+from typing import Literal
 
 import yaml
+from pydantic import AnyHttpUrl
 
 from rag_quality_lab.domain.models import (
     BudgetConfig,
@@ -29,6 +32,7 @@ from rag_quality_lab.providers.fake import (
     FakeJudgeProvider,
 )
 from rag_quality_lab.providers.openai_compatible import ProviderError
+from rag_quality_lab.retrieval.index import load_documents
 
 
 class HighUsageChatProvider:
@@ -181,7 +185,9 @@ def write_corpus(path: Path) -> None:
     )
 
 
-def experiment_config(tmp_path: Path, *, mode: str = "mock") -> ExperimentConfig:
+def experiment_config(
+    tmp_path: Path, *, mode: Literal["mock", "live"] = "mock"
+) -> ExperimentConfig:
     corpus_path = tmp_path / "knowledge_base"
     write_corpus(corpus_path)
     return ExperimentConfig(
@@ -194,10 +200,10 @@ def experiment_config(tmp_path: Path, *, mode: str = "mock") -> ExperimentConfig
         max_workers=1,
         provider=ProviderConfig(
             name="fake",
-            base_url="https://example.com/v1",
+            base_url=AnyHttpUrl("https://example.com/v1"),
             api_key_env="FAKE_API_KEY",
             chat_model="fake-model",
-            embedding_model="fake-embedding",
+            embedding_model="fake-hash-32",
         ),
         retrieval=[
             RetrievalConfig(
@@ -207,7 +213,7 @@ def experiment_config(tmp_path: Path, *, mode: str = "mock") -> ExperimentConfig
                 prompt_variant="direct",
             )
         ],
-        budget=BudgetConfig(hard_limit=20),
+        budget=BudgetConfig(hard_limit=Decimal("20")),
     )
 
 
@@ -313,7 +319,7 @@ def test_runner_preflight_budget_exceeded_schedules_no_paid_cases(
     config = config.model_copy(
         update={
             "mode": "live",
-            "budget": BudgetConfig(hard_limit=30),
+            "budget": BudgetConfig(hard_limit=Decimal("30")),
             "pricing_path": pricing_path,
         }
     )
@@ -388,7 +394,11 @@ def test_live_runner_preflights_and_settles_generation_and_judge_costs(
 
     result = run_experiment(config, bundle, scripted_dataset())
 
-    assert len(planned_calls(config, 2)) == 2
+    assert len(
+        planned_calls(
+            config, scripted_dataset(), load_documents(config.knowledge_base_path)
+        )
+    ) == 2
     assert result.status is ExperimentStatus.COMPLETED
     expected_cost = sum(
         case.usage.total_tokens + case.judge_usage.total_tokens

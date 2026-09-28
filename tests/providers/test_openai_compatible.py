@@ -316,3 +316,43 @@ def test_embeddings_preserve_response_order(
     vectors = provider.embed(["first", "second"], model="embedding-model")
 
     assert vectors == [[1.0, 0.0], [0.0, 1.0]]
+
+
+def test_metered_embeddings_report_usage_and_every_http_attempt(
+    make_provider: Callable[..., OpenAICompatibleProvider],
+) -> None:
+    session = FakeSession(
+        [
+            FakeResponse(503, {}, text="busy"),
+            FakeResponse(
+                200,
+                {
+                    "data": [{"index": 0, "embedding": [1.0, 0.0]}],
+                    "usage": {"prompt_tokens": 7, "total_tokens": 7},
+                },
+            ),
+        ]
+    )
+    provider = make_provider(session=session, sleeper=lambda _: None)
+
+    response = provider.embed_with_metadata(["first"], model="embedding-model")
+
+    assert response.vectors == [[1.0, 0.0]]
+    assert response.http_request_count == 2
+    assert response.usage is not None
+    assert response.usage.input_tokens == 7
+    assert response.usage.output_tokens == 0
+
+
+def test_metered_embeddings_without_usage_leave_usage_unknown(
+    make_provider: Callable[..., OpenAICompatibleProvider],
+) -> None:
+    session = FakeSession(
+        [FakeResponse(200, {"data": [{"index": 0, "embedding": [1.0]}]})]
+    )
+    provider = make_provider(session=session)
+
+    response = provider.embed_with_metadata(["first"], model="embedding-model")
+
+    assert response.usage is None
+    assert response.http_request_count == 1

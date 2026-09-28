@@ -4,9 +4,14 @@ import json
 from decimal import Decimal
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
-from rag_quality_lab.domain.models import JudgeVerdict, PairwiseVerdict, TokenUsage
+from rag_quality_lab.domain.models import (
+    JudgeVerdict,
+    PairwiseVerdict,
+    ParameterDifference,
+    TokenUsage,
+)
 
 Preference = Literal["A", "B", "tie"]
 
@@ -48,6 +53,10 @@ class PairwiseComparisonRecord(BaseModel):
     judge_model: str
     outcomes: list[PairwiseCaseResult]
     summary: dict[str, float]
+    # Every parameter that differs between the two configurations, and the
+    # confounding warning when more than one does.
+    config_differences: list[ParameterDifference] = Field(default_factory=list)
+    warning: str | None = None
 
 
 def parse_judge_verdict(content: str) -> JudgeVerdict:

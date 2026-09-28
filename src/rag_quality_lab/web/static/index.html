@@ -1,0 +1,219 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RAG Quality Lab — Workbench</title>
+<style>
+  :root { color-scheme: light; --ink:#18212f; --muted:#657084; --line:#dce2ea; --card:#f7f9fc; --accent:#b42318; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:14px/1.5 system-ui,sans-serif; color:var(--ink); background:#fff; }
+  main { width:min(1100px,94vw); margin:24px auto 72px; }
+  h1,h2,h3 { line-height:1.2; }
+  h2 { margin-top:32px; border-bottom:1px solid var(--line); padding-bottom:6px; }
+  fieldset { border:1px solid var(--line); border-radius:8px; margin:10px 0; }
+  label { display:block; margin:8px 0 2px; font-weight:600; }
+  input[type=text] { width:100%; padding:6px 8px; border:1px solid var(--line); border-radius:6px; }
+  button { padding:6px 14px; border-radius:6px; border:1px solid var(--ink); background:#fff; cursor:pointer; }
+  button:hover { background:var(--card); }
+  table { width:100%; border-collapse:collapse; font-variant-numeric:tabular-nums; margin:8px 0; }
+  th,td { padding:6px 8px; border:1px solid var(--line); text-align:left; vertical-align:top; }
+  th { background:var(--card); }
+  pre { white-space:pre-wrap; background:#111827; color:#f9fafb; padding:10px; border-radius:6px; overflow:auto; max-height:360px; }
+  .muted { color:var(--muted); }
+  .row { display:flex; gap:12px; flex-wrap:wrap; }
+  .row > div { flex:1; min-width:240px; }
+  .warning { border:2px solid var(--accent); color:var(--accent); background:#fef3f2; border-radius:8px; padding:8px 12px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>RAG Quality Lab — Workbench</h1>
+  <p class="muted">Offline by default. Every count on this page is read from the database, not recomputed here.</p>
+
+  <h2>Dataset &amp; configuration</h2>
+  <div class="row">
+    <div>
+      <label for="dataset-path">Dataset path</label>
+      <input id="dataset-path" type="text" placeholder="../data/eval/rag_quality_v1.1.json">
+      <button onclick="loadDataset()">Load splits</button>
+      <pre id="dataset-out">-</pre>
+    </div>
+    <div>
+      <label for="config-path">Experiment config path</label>
+      <input id="config-path" type="text" placeholder="configs/offline.yaml">
+      <div>
+        <button onclick="loadConfig()">Load config</button>
+        <button onclick="precheck()">Precheck</button>
+      </div>
+      <pre id="config-out">-</pre>
+    </div>
+  </div>
+
+  <h2>Run an experiment</h2>
+  <div class="row">
+    <div>
+      <label><input type="checkbox" id="confirm-live"> Confirm live run</label>
+      <button onclick="startRun()">Start</button>
+      <p class="muted">Live runs are refused unless the server was started with --allow-live.</p>
+      <pre id="run-out">-</pre>
+    </div>
+    <div>
+      <label for="database-path">Database path</label>
+      <input id="database-path" type="text" placeholder="../.ragql/experiments.sqlite3">
+      <button onclick="listExperiments()">List experiments</button>
+      <pre id="experiments-out">-</pre>
+    </div>
+  </div>
+
+  <h2>Experiment detail</h2>
+  <div class="row">
+    <div>
+      <label for="experiment-id">Experiment id (or latest-live)</label>
+      <input id="experiment-id" type="text">
+      <div>
+        <button onclick="loadDetail()">Progress</button>
+        <button onclick="cancelRun()">Cancel</button>
+        <button onclick="resumeRun()">Resume</button>
+      </div>
+      <pre id="detail-out">-</pre>
+    </div>
+    <div>
+      <label for="results-config">Filter by config id (optional)</label>
+      <input id="results-config" type="text">
+      <button onclick="loadResults()">Per-question results</button>
+      <pre id="results-out">-</pre>
+    </div>
+  </div>
+
+  <h2>Reports</h2>
+  <div class="row">
+    <div>
+      <label for="output-dir">Output directory</label>
+      <input id="output-dir" type="text" placeholder="../artifacts/offline-baseline">
+      <button onclick="generateReport()">Generate report</button>
+      <pre id="report-out">-</pre>
+    </div>
+    <div>
+      <label for="baseline-id">Baseline experiment id (for paired compare)</label>
+      <input id="baseline-id" type="text">
+      <label for="baseline-config">Baseline config id</label>
+      <input id="baseline-config" type="text">
+      <label for="candidate-config">Candidate config id</label>
+      <input id="candidate-config" type="text">
+      <button onclick="compare()">Compare arms</button>
+      <pre id="compare-out">-</pre>
+    </div>
+  </div>
+</main>
+
+<script>
+async function callApi(path, options) {
+  const res = await fetch(path, options);
+  const body = await res.json();
+  if (!res.ok) { throw new Error(body.error || res.statusText); }
+  return body;
+}
+function q(id) { return document.getElementById(id).value.trim(); }
+function show(id, value) { document.getElementById(id).textContent = JSON.stringify(value, null, 2); }
+function showError(id, error) { document.getElementById(id).textContent = 'Error: ' + error.message; }
+
+// Persist the fields that identify "which experiment am I looking at" so a
+// page refresh returns to the same one instead of a blank workbench.
+const PERSISTED_FIELDS = ['dataset-path', 'config-path', 'database-path', 'experiment-id',
+  'baseline-id', 'baseline-config', 'candidate-config', 'output-dir'];
+function restorePersistedFields() {
+  for (const id of PERSISTED_FIELDS) {
+    const saved = localStorage.getItem('ragql.' + id);
+    if (saved !== null) { document.getElementById(id).value = saved; }
+    document.getElementById(id).addEventListener('input', () => {
+      localStorage.setItem('ragql.' + id, document.getElementById(id).value);
+    });
+  }
+  if (q('experiment-id') && q('database-path')) { loadDetail(); }
+}
+window.addEventListener('DOMContentLoaded', restorePersistedFields);
+
+async function loadDataset() {
+  try { show('dataset-out', await callApi('/api/dataset?dataset=' + encodeURIComponent(q('dataset-path')))); }
+  catch (e) { showError('dataset-out', e); }
+}
+async function loadConfig() {
+  try { show('config-out', await callApi('/api/config?config=' + encodeURIComponent(q('config-path')))); }
+  catch (e) { showError('config-out', e); }
+}
+async function precheck() {
+  try { show('config-out', await callApi('/api/precheck?config=' + encodeURIComponent(q('config-path')))); }
+  catch (e) { showError('config-out', e); }
+}
+async function startRun() {
+  try {
+    const body = { config: q('config-path'), confirm_live_run: document.getElementById('confirm-live').checked };
+    const started = await callApi('/api/experiments/start', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+    });
+    show('run-out', started);
+  } catch (e) { showError('run-out', e); }
+}
+async function listExperiments() {
+  try { show('experiments-out', await callApi('/api/experiments?database=' + encodeURIComponent(q('database-path')))); }
+  catch (e) { showError('experiments-out', e); }
+}
+async function loadDetail() {
+  try {
+    show('detail-out', await callApi(
+      '/api/experiments/' + encodeURIComponent(q('experiment-id')) +
+      '?database=' + encodeURIComponent(q('database-path'))
+    ));
+  } catch (e) { showError('detail-out', e); }
+}
+async function cancelRun() {
+  try {
+    show('detail-out', await callApi('/api/experiments/' + encodeURIComponent(q('experiment-id')) + '/cancel', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ database: q('database-path'), experiment_id: q('experiment-id') })
+    }));
+  } catch (e) { showError('detail-out', e); }
+}
+async function resumeRun() {
+  try {
+    show('detail-out', await callApi('/api/experiments/' + encodeURIComponent(q('experiment-id')) + '/resume', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ config: q('config-path'), confirm_live_run: document.getElementById('confirm-live').checked })
+    }));
+  } catch (e) { showError('detail-out', e); }
+}
+async function loadResults() {
+  try {
+    let url = '/api/experiments/' + encodeURIComponent(q('experiment-id')) + '/results?database=' + encodeURIComponent(q('database-path'));
+    if (q('results-config')) { url += '&config_id=' + encodeURIComponent(q('results-config')); }
+    show('results-out', await callApi(url));
+  } catch (e) { showError('results-out', e); }
+}
+async function generateReport() {
+  try {
+    const url = '/api/experiments/' + encodeURIComponent(q('experiment-id')) + '/report';
+    const body = { database: q('database-path'), output: q('output-dir') };
+    show('report-out', await callApi(url, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+    }));
+  } catch (e) { showError('report-out', e); }
+}
+async function compare() {
+  try {
+    const body = {
+      database: q('database-path'),
+      baseline: q('baseline-id'),
+      candidate: q('experiment-id'),
+      baseline_config: q('baseline-config'),
+      candidate_config: q('candidate-config'),
+      output: q('output-dir'),
+    };
+    show('compare-out', await callApi('/api/compare', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+    }));
+  } catch (e) { showError('compare-out', e); }
+}
+</script>
+</body>
+</html>

@@ -4,6 +4,7 @@ from collections.abc import Sequence
 from typing import Protocol, runtime_checkable
 
 from rag_quality_lab.domain.models import (
+    EmbeddingResponse,
     JudgeVerdict,
     PairwiseVerdict,
     ProviderResponse,
@@ -19,6 +20,16 @@ class EmbeddingProvider(Protocol):
         self, texts: Sequence[str], *, model: str | None = None
     ) -> list[list[float]]:
         """Return one vector per input text."""
+
+
+@runtime_checkable
+class MeteredEmbeddingProvider(Protocol):
+    """Embedding provider that also reports usage and physical HTTP attempts."""
+
+    def embed_with_metadata(
+        self, texts: Sequence[str], *, model: str | None = None
+    ) -> EmbeddingResponse:
+        """Return one vector per input text plus request metadata."""
 
 
 @runtime_checkable

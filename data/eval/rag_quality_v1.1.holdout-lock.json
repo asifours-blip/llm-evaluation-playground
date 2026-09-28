@@ -1,0 +1,28 @@
+{
+  "freezes": [
+    {
+      "dataset_name": "rag-quality-v1",
+      "dataset_version": "1.1.0",
+      "holdout_hash": "fd58b56b07fec383a51e1899ec9edb7d0be17451acca6deabe319b9dc0d60571",
+      "holdout_case_ids": [
+        "rag-001",
+        "rag-006",
+        "rag-007",
+        "rag-010",
+        "rag-016",
+        "rag-018",
+        "rag-021",
+        "rag-024",
+        "rag-026",
+        "rag-027",
+        "rag-031",
+        "rag-034",
+        "rag-039",
+        "rag-042",
+        "rag-044",
+        "rag-045"
+      ],
+      "frozen_at": "2026-09-28T03:44:38.308883Z"
+    }
+  ]
+}

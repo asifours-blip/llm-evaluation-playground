@@ -16,3 +16,4 @@ notes:
   - Peak windows are Beijing time 09:00-12:00 and 14:00-18:00.
   - Official off-peak cache-hit, cache-miss, and output rates are half of peak rates.
   - Peak rates are used as the hard-budget preflight worst case.
+  - No embedding model is priced in this snapshot. The example configs use the local fake-hash embedding, which sends no provider request and is not planned. A remote embedding model must be added with a verified price, otherwise preflight fails instead of charging it at zero.

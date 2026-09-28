@@ -1,9 +1,8 @@
 import pytest
 from pydantic import ValidationError
 
-from rag_quality_lab.domain.models import JudgeVerdict
+from rag_quality_lab.domain.models import JudgeVerdict, PairwiseVerdict
 from rag_quality_lab.metrics.judge import (
-    PairwiseVerdict,
     build_pairwise_judge_prompt,
     build_scalar_judge_prompt,
     parse_judge_verdict,

@@ -62,8 +62,8 @@ def example_case_result() -> CaseResult:
 def test_store_enables_wal_busy_timeout_and_schema(tmp_path: Path) -> None:
     with ExperimentStore(tmp_path / "runs.sqlite3") as store:
         assert str(store.pragma("journal_mode")).lower() == "wal"
-        assert int(store.pragma("busy_timeout")) == 5000
-        assert int(store.pragma("foreign_keys")) == 1
+        assert store.pragma("busy_timeout") == 5000
+        assert store.pragma("foreign_keys") == 1
         assert {
             "experiments",
             "case_runs",

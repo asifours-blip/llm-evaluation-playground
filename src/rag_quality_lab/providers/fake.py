@@ -13,6 +13,14 @@ from rag_quality_lab.domain.models import (
     TokenUsage,
 )
 
+LOCAL_EMBEDDING_MODEL_PREFIX = "fake-hash"
+
+
+def is_local_embedding_model(model: str) -> bool:
+    """Return whether a configured embedding model is the local hash embedding."""
+
+    return model.startswith(LOCAL_EMBEDDING_MODEL_PREFIX)
+
 
 class FakeEmbeddingProvider:
     """Create stable normalized vectors by hashing whitespace tokens."""

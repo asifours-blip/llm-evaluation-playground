@@ -3,7 +3,9 @@ import os
 import re
 import subprocess
 import sys
+from datetime import date
 from pathlib import Path
+from typing import Any
 
 import yaml
 
@@ -12,7 +14,11 @@ from rag_quality_lab.metrics.calibration import AnnotationSnapshot, HumanAnnotat
 
 
 def write_cli_fixture(
-    tmp_path: Path, *, mode: str = "mock", with_judge: bool = False
+    tmp_path: Path,
+    *,
+    mode: str = "mock",
+    with_judge: bool = False,
+    embedding_model: str = "fake-hash-64",
 ) -> Path:
     corpus = tmp_path / "knowledge_base"
     corpus.mkdir(parents=True)
@@ -48,7 +54,7 @@ def write_cli_fixture(
             {
                 "provider": "fake",
                 "currency": "CNY",
-                "verified_at": "2026-08-21",
+                "verified_at": date.today().isoformat(),
                 "source_url": "https://example.com/pricing",
                 "models": {
                     "fake-model": {"input_cache_miss": 1, "output": 2}
@@ -58,7 +64,7 @@ def write_cli_fixture(
         encoding="utf-8",
     )
     config = tmp_path / f"{mode}.yaml"
-    payload = {
+    payload: dict[str, Any] = {
         "name": f"cli-{mode}",
         "mode": mode,
         "dataset_path": str(dataset),
@@ -71,7 +77,7 @@ def write_cli_fixture(
             "base_url": "https://example.com/v1",
             "api_key_env": "FAKE_API_KEY",
             "chat_model": "fake-model",
-            "embedding_model": "fake-embedding",
+            "embedding_model": embedding_model,
         },
         "retrieval": [
             {
@@ -137,8 +143,43 @@ def test_live_preflight_includes_generation_and_judge_calls(tmp_path: Path) -> N
         1536,
     ]
     assert [call["requests_per_case"] for call in payload["planned_calls"]] == [6, 6]
-    assert payload["pricing_verified_at"] == "2026-08-21"
+    assert payload["pricing_verified_at"] == date.today().isoformat()
     assert payload["pricing_source_url"] == "https://example.com/pricing"
+
+
+def test_live_preflight_plans_remote_embeddings_and_requires_their_price(
+    tmp_path: Path,
+) -> None:
+    config = write_cli_fixture(
+        tmp_path, mode="live", embedding_model="remote-embedding"
+    )
+
+    missing = run_cli("run", "--config", str(config), "--preflight-only")
+
+    assert missing.returncode == 2
+    assert "missing price for planned model(s): remote-embedding" in missing.stderr
+    assert "Traceback" not in missing.stderr
+
+    pricing_path = tmp_path / "pricing.yaml"
+    pricing: dict[str, Any] = yaml.safe_load(pricing_path.read_text(encoding="utf-8"))
+    pricing["models"]["remote-embedding"] = {"input_cache_miss": 1, "output": 0}
+    pricing_path.write_text(yaml.safe_dump(pricing), encoding="utf-8")
+
+    priced = run_cli("run", "--config", str(config), "--preflight-only")
+
+    assert priced.returncode == 0, priced.stderr
+    payload = json.loads(priced.stdout)
+    assert [call["phase"] for call in payload["planned_calls"]] == [
+        "generation_with_repair",
+        "embedding_index",
+        "embedding_query",
+        "embedding_answer",
+    ]
+    assert all(
+        call["model"] == "remote-embedding" and call["output_token_cap"] == 0
+        for call in payload["planned_calls"][1:]
+    )
+    assert payload["total_request_count"] == 6 + 3 + 3 + 3
 
 
 def test_confirmed_live_run_without_key_fails_without_traceback(
@@ -345,3 +386,42 @@ def test_database_regression_uses_stored_eligible_judge_calibration(
     payload = json.loads(result.stdout)
     assert payload["failed_metrics"] == ["judge_mean_score"]
     assert payload["skipped_metrics"] == []
+
+
+def test_resume_cancel_and_status_commands_respect_terminal_states(
+    tmp_path: Path,
+) -> None:
+    config = write_cli_fixture(tmp_path)
+    database = str(tmp_path / "runs.sqlite3")
+    experiment_id = json.loads(run_cli("run", "--config", str(config)).stdout)[
+        "experiment_id"
+    ]
+
+    resumed = run_cli("resume", "--experiment", experiment_id, "--config", str(config))
+    cancelled = run_cli("cancel", "--experiment", experiment_id, "--database", database)
+    listed = run_cli("status", "--database", database)
+    detail = run_cli("status", "--experiment", experiment_id, "--database", database)
+
+    assert resumed.returncode == 2
+    assert "status is completed" in resumed.stderr
+    assert cancelled.returncode == 2
+    assert "completed" in cancelled.stderr
+    assert listed.returncode == 0, listed.stderr
+    assert [row["id"] for row in json.loads(listed.stdout)["experiments"]] == [
+        experiment_id
+    ]
+    payload = json.loads(detail.stdout)
+    assert payload["status"] == "completed"
+    assert payload["progress"] == {"done": 1, "total": 1, "unknown": 0}
+    assert payload["spent"] == "0"
+    positional = run_cli("status", experiment_id, "--database", database)
+    assert positional.returncode == 2
+
+
+def test_live_resume_requires_explicit_confirmation(tmp_path: Path) -> None:
+    config = write_cli_fixture(tmp_path, mode="live")
+
+    result = run_cli("resume", "--experiment", "missing-id", "--config", str(config))
+
+    assert result.returncode == 2
+    assert "--confirm-live-run" in result.stderr

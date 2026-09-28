@@ -114,19 +114,7 @@ class InMemoryIndex:
         chunk_list = list(chunks)
         cache_file = Path(cache_path) if cache_path is not None else None
         cache = _load_cache(cache_file) if cache_file is not None else {}
-        chunking_hash = _hash_text(
-            "\n".join(f"{chunk.id}\0{chunk.text}" for chunk in chunk_list)
-        )
-        provider_id = str(
-            getattr(
-                provider,
-                "cache_identity",
-                f"{type(provider).__module__}.{type(provider).__qualname__}",
-            )
-        )
-        keys = [
-            _cache_key(provider_id, model, chunk, chunking_hash) for chunk in chunk_list
-        ]
+        keys = _cache_keys(chunk_list, embedding_cache_identity(provider), model)
 
         missing_indexes = [index for index, key in enumerate(keys) if key not in cache]
         if missing_indexes:
@@ -148,11 +136,56 @@ class InMemoryIndex:
         query_vectors = self.provider.embed([query], model=self.model)
         if len(query_vectors) != 1:
             raise ValueError("embedding provider must return one query vector")
+        return self.rank(query_vectors[0], top_k=top_k)
+
+    def rank(self, query_vector: Sequence[float], *, top_k: int) -> list[RetrievalHit]:
+        """Rank chunks against an already embedded query."""
+
+        if top_k <= 0:
+            raise ValueError("top_k must be positive")
         hits = [
-            RetrievalHit(chunk=chunk, score=cosine_similarity(query_vectors[0], vector))
+            RetrievalHit(chunk=chunk, score=cosine_similarity(query_vector, vector))
             for chunk, vector in zip(self.chunks, self.embeddings, strict=True)
         ]
         return sorted(hits, key=lambda hit: (-hit.score, hit.chunk.id))[:top_k]
+
+
+def embedding_cache_identity(provider: EmbeddingProvider) -> str:
+    """Return the provider identity that scopes embedding cache entries."""
+
+    return str(
+        getattr(
+            provider,
+            "cache_identity",
+            f"{type(provider).__module__}.{type(provider).__qualname__}",
+        )
+    )
+
+
+def uncached_chunks(
+    chunks: Sequence[Chunk],
+    provider: EmbeddingProvider,
+    *,
+    model: str | None,
+    cache_path: str | Path,
+) -> list[Chunk]:
+    """Return chunks that ``InMemoryIndex.from_chunks`` would send to the provider.
+
+    A chunk counts as cached only when an entry keyed by provider identity,
+    model, chunk text, and chunking layout exists in the cache file.
+    """
+
+    chunk_list = list(chunks)
+    cache = _load_cache(Path(cache_path))
+    keys = _cache_keys(chunk_list, embedding_cache_identity(provider), model)
+    return [chunk for chunk, key in zip(chunk_list, keys, strict=True) if key not in cache]
+
+
+def _cache_keys(
+    chunks: Sequence[Chunk], provider_id: str, model: str | None
+) -> list[str]:
+    chunking_hash = _hash_text("\n".join(f"{chunk.id}\0{chunk.text}" for chunk in chunks))
+    return [_cache_key(provider_id, model, chunk, chunking_hash) for chunk in chunks]
 
 
 def _cache_key(

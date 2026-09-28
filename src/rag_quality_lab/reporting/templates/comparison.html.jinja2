@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>RAG Quality Lab — paired comparison</title>
+  <style>
+    :root { color-scheme: light; --ink:#18212f; --muted:#657084; --line:#dce2ea; --card:#f7f9fc; --accent:#b42318; }
+    * { box-sizing: border-box; }
+    body { margin:0; font:14px/1.5 system-ui,sans-serif; color:var(--ink); background:#fff; }
+    main { width:min(1180px,94vw); margin:32px auto 72px; }
+    h2 { margin-top:36px; border-bottom:1px solid var(--line); padding-bottom:8px; }
+    .muted { color:var(--muted); }
+    table { width:100%; border-collapse:collapse; font-variant-numeric:tabular-nums; margin:8px 0; }
+    th,td { padding:8px; border:1px solid var(--line); text-align:left; vertical-align:top; }
+    th { background:var(--card); }
+    details { border:1px solid var(--line); border-radius:8px; margin:10px 0; padding:10px 14px; }
+    summary { cursor:pointer; font-weight:700; }
+    pre { white-space:pre-wrap; background:#111827; color:#f9fafb; padding:10px; border-radius:6px; margin:4px 0; }
+    .grid { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+    .warning { border:2px solid var(--accent); color:var(--accent); background:#fef3f2; border-radius:8px; padding:12px 14px; font-weight:700; font-size:16px; }
+  </style>
+</head>
+<body>
+<main>
+  {% if report.warning %}<p class="warning">⚠ {{ report.warning }}</p>{% endif %}
+  <h1>Paired comparison</h1>
+  <p class="muted">Baseline {{ report.baseline_id }} · {{ report.baseline_config_id }} → candidate {{ report.candidate_id }} · {{ report.candidate_config_id }}</p>
+
+  <h2>Controlled conditions (identical on both sides)</h2>
+  <table><tbody>{% for name, value in report.conditions|dictsort %}<tr><th>{{ name }}</th><td><code>{{ value }}</code></td></tr>{% endfor %}</tbody></table>
+
+  <h2>Differing parameters ({{ report.config_differences|length }})</h2>
+  {% if report.config_differences %}
+  <table><thead><tr><th>Parameter</th><th>Baseline</th><th>Candidate</th></tr></thead><tbody>
+  {% for difference in report.config_differences %}<tr><td><code>{{ difference.path }}</code></td><td>{{ difference.baseline|tojson }}</td><td>{{ difference.candidate|tojson }}</td></tr>{% endfor %}
+  </tbody></table>
+  {% else %}<p>No parameter differs.</p>{% endif %}
+
+  <h2>Mean deltas by split</h2>
+  <p class="muted">Dev deltas guide tuning and are not held-out evidence; splits are never pooled.</p>
+  {% for split, deltas in report.split_deltas|dictsort %}
+  <table><caption>{{ split }}</caption><thead><tr><th>Metric</th><th>Baseline</th><th>Candidate</th><th>Delta</th></tr></thead><tbody>
+  {% for name, delta in deltas|dictsort %}<tr><th>{{ name }}</th><td>{{ delta.baseline }}</td><td>{{ delta.candidate }}</td><td>{{ delta.absolute }}</td></tr>{% endfor %}
+  </tbody></table>
+  {% endfor %}
+
+  <h2>Per-question evidence</h2>
+  {% for case in report.cases %}
+  <details>
+    <summary>{{ case.case_id }} · {{ case.split }} · {{ case.direction }}</summary>
+    <p>{{ case.question }}</p>
+    <p class="muted">Only baseline: {{ case.baseline_only_chunk_ids|join(", ") or "none" }} · only candidate: {{ case.candidate_only_chunk_ids|join(", ") or "none" }}{% for change in case.rank_changes %} · {{ change.chunk_id }} rank {{ change.baseline_rank }} → {{ change.candidate_rank }}{% endfor %}</p>
+    <div class="grid">
+      <div><h3>Baseline ({{ case.baseline_status }})</h3>
+      {% for hit in case.baseline_hits %}<pre>#{{ hit.rank }} {{ hit.chunk_id }} · score={{ hit.score }}
+{{ hit.text }}</pre>{% else %}<p class="muted">No hits.</p>{% endfor %}</div>
+      <div><h3>Candidate ({{ case.candidate_status }})</h3>
+      {% for hit in case.candidate_hits %}<pre>#{{ hit.rank }} {{ hit.chunk_id }} · score={{ hit.score }}
+{{ hit.text }}</pre>{% else %}<p class="muted">No hits.</p>{% endfor %}</div>
+    </div>
+    {% if case.metric_deltas %}<table><tbody>{% for name, delta in case.metric_deltas|dictsort %}<tr><th>{{ name }}</th><td>{{ delta.baseline }} → {{ delta.candidate }} ({{ delta.absolute }})</td></tr>{% endfor %}</tbody></table>{% endif %}
+  </details>
+  {% endfor %}
+</main>
+</body>
+</html>

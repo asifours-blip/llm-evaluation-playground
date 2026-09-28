@@ -23,6 +23,7 @@
     summary { cursor:pointer; font-weight:700; }
     pre { white-space:pre-wrap; background:#111827; color:#f9fafb; padding:12px; border-radius:6px; overflow:auto; }
     code { overflow-wrap:anywhere; }
+    .warning { border:2px solid var(--accent); color:var(--accent); background:#fef3f2; border-radius:8px; padding:12px 14px; font-weight:700; overflow-wrap:anywhere; }
   </style>
 </head>
 <body>
@@ -30,6 +31,8 @@
   <span class="badge">{{ report.badge|upper }}</span>
   <h1>RAG Quality Lab</h1>
   <p class="muted">Experiment {{ report.id }} · {{ report.status }}</p>
+  {% if report.comparison_warning %}<p class="warning">Warning: {{ report.comparison_warning }}</p>{% endif %}
+  {% if report.code_version_warning %}<p class="warning">Warning: {{ report.code_version_warning }}</p>{% endif %}
 
   <h2>Reproducibility identity</h2>
   <div class="grid">
@@ -55,6 +58,22 @@
     <div class="card"><div class="muted">HTTP requests</div><div class="value">{% if report.system.http_request_count_complete %}{{ report.system.http_request_count }}{% else %}unknown{% endif %}</div></div>
   </div>
 
+  <h2>Results by dataset split</h2>
+  <p class="muted">The quality summary above pools every split. Only a frozen holdout is held-out evidence; tune on dev and report on the frozen holdout.</p>
+  {% for split, entry in report.split_breakdown|dictsort %}
+  <h3>{{ split }} · {{ entry.case_count }} cases</h3>
+  <p class="{{ 'muted' if entry.held_out else 'warning' }}">{{ entry.note }}</p>
+  {% for config_id, metrics in entry.metrics|dictsort %}
+  <table><caption>{{ config_id }}</caption><tbody>{% for name, value in metrics|dictsort %}<tr><th>{{ name }}</th><td>{{ value }}</td></tr>{% endfor %}</tbody></table>
+  {% endfor %}
+  {% else %}<p class="muted">No case results.</p>{% endfor %}
+
+  <h2>Dataset labels</h2>
+  <p class="muted">Counts of distinct cases; {{ "未标注" }} marks a label the dataset never recorded.</p>
+  {% for label, counts in report.dataset_labels|dictsort %}
+  <table><caption>{{ label }}</caption><tbody>{% for value, count in counts|dictsort %}<tr><th>{{ value }}</th><td>{{ count }}</td></tr>{% endfor %}</tbody></table>
+  {% endfor %}
+
   <h2>Category breakdown</h2>
   {% for category, metrics in report.category_breakdown|dictsort %}
   <h3>{{ category }}</h3>
@@ -76,6 +95,11 @@
 {{ hit.chunk.text }}</pre>{% else %}<p class="muted">No retrieval hits.</p>{% endfor %}
   </details>
   {% endfor %}
+
+  <h2>Limitations</h2>
+  <ul>
+  {% for item in report.limitations %}<li>{{ item }}</li>{% endfor %}
+  </ul>
 
   <h2>Configuration</h2>
   <pre>{{ report.identity.config|tojson(indent=2) }}</pre>

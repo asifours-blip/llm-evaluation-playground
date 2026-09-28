@@ -15,6 +15,7 @@ import requests
 from pydantic import ValidationError
 
 from rag_quality_lab.domain.models import (
+    EmbeddingResponse,
     JudgeVerdict,
     PairwiseVerdict,
     ProviderResponse,
@@ -35,6 +36,58 @@ JUDGE_INPUT_TOKEN_CAP = 3500
 JUDGE_OUTPUT_TOKEN_CAP = 256
 MESSAGE_PROTOCOL_TOKEN_ALLOWANCE = 128
 REPAIR_PROMPT_TOKEN_ALLOWANCE = 384
+# Per-text allowance for special tokens an embedding tokenizer may add on top
+# of the UTF-8 byte upper bound.
+EMBEDDING_TEXT_TOKEN_ALLOWANCE = 8
+# Byte cap for a generated answer that is embedded for semantic similarity.
+# Output is capped at GENERATION_OUTPUT_TOKEN_CAP tokens, but tokens have no
+# fixed byte width, so the runner refuses to embed any longer answer.
+GENERATED_ANSWER_EMBEDDING_BYTE_CAP = GENERATION_OUTPUT_TOKEN_CAP * 8
+
+
+def embedding_text_token_bound(text: str) -> int:
+    """Conservative token upper bound of one embedding input text."""
+
+    return len(text.encode("utf-8")) + EMBEDDING_TEXT_TOKEN_ALLOWANCE
+
+
+def split_embedding_batches(
+    bounds: Sequence[int],
+    *,
+    max_inputs: int | None,
+    max_tokens: int | None,
+) -> list[range]:
+    """Group consecutive texts into request batches, preserving input order.
+
+    ``bounds`` are per-text token upper bounds. A batch holds at most
+    ``max_inputs`` texts whose bounds sum to at most ``max_tokens``; ``None``
+    leaves that dimension unlimited. A single text whose bound exceeds
+    ``max_tokens`` cannot be split and is rejected before any request.
+    """
+
+    if max_inputs is not None and max_inputs <= 0:
+        raise ValueError("embedding batch size must be positive")
+    if max_tokens is not None and max_tokens <= 0:
+        raise ValueError("embedding batch token limit must be positive")
+    batches: list[range] = []
+    start = 0
+    batch_tokens = 0
+    for index, bound in enumerate(bounds):
+        if max_tokens is not None and bound > max_tokens:
+            raise ValueError(
+                f"embedding input {index} has an upper bound of {bound} tokens, "
+                f"above the batch token limit of {max_tokens}"
+            )
+        full = max_inputs is not None and index - start >= max_inputs
+        over = max_tokens is not None and batch_tokens + bound > max_tokens
+        if index > start and (full or over):
+            batches.append(range(start, index))
+            start = index
+            batch_tokens = 0
+        batch_tokens += bound
+    if len(bounds) > start:
+        batches.append(range(start, len(bounds)))
+    return batches
 
 
 class HTTPResponse(Protocol):
@@ -148,6 +201,8 @@ class OpenAICompatibleProvider:
         sleeper: Callable[[float], None] = time.sleep,
         jitter: Callable[[], float] = random.random,
         extra_body: Mapping[str, Any] | None = None,
+        embedding_batch_size: int | None = None,
+        embedding_batch_token_limit: int | None = None,
     ) -> None:
         api_key = os.getenv(api_key_env)
         if not api_key:
@@ -165,6 +220,14 @@ class OpenAICompatibleProvider:
         self.sleeper = sleeper
         self.jitter = jitter
         self.extra_body = dict(extra_body or {})
+        self.embedding_batch_size = embedding_batch_size
+        self.embedding_batch_token_limit = embedding_batch_token_limit
+        # Reject invalid limits at construction rather than at the first request.
+        split_embedding_batches(
+            [],
+            max_inputs=embedding_batch_size,
+            max_tokens=embedding_batch_token_limit,
+        )
 
     def answer(
         self,
@@ -241,14 +304,61 @@ class OpenAICompatibleProvider:
     def embed(
         self, texts: Sequence[str], *, model: str | None = None
     ) -> list[list[float]]:
+        return self.embed_with_metadata(texts, model=model).vectors
+
+    def embed_with_metadata(
+        self, texts: Sequence[str], *, model: str | None = None
+    ) -> EmbeddingResponse:
+        """Embed texts and report provider usage plus physical HTTP attempts.
+
+        Texts are sent in consecutive batches of at most
+        ``embedding_batch_size`` texts and ``embedding_batch_token_limit``
+        upper-bound tokens, one request (plus retries) per batch. Usage is
+        known only when every batch reported it.
+        """
+
         if not model:
             raise ValueError("embedding model is required")
-        request_counter = _RequestCounter()
-        payload = self._post_json(
-            "/embeddings",
-            {"model": model, "input": list(texts)},
-            request_counter=request_counter,
+        batches = split_embedding_batches(
+            [embedding_text_token_bound(text) for text in texts],
+            max_inputs=self.embedding_batch_size,
+            max_tokens=self.embedding_batch_token_limit,
         )
+        request_counter = _RequestCounter()
+        vectors: list[list[float]] = []
+        usages: list[TokenUsage | None] = []
+        for batch in batches:
+            batch_texts = [texts[index] for index in batch]
+            payload = self._post_json(
+                "/embeddings",
+                {"model": model, "input": batch_texts},
+                request_counter=request_counter,
+            )
+            vectors.extend(
+                self._embedding_vectors(payload, len(batch_texts), request_counter)
+            )
+            usages.append(self._embedding_usage(payload))
+        known = [usage for usage in usages if usage is not None]
+        usage = None
+        if known and len(known) == len(usages):
+            usage = TokenUsage(
+                input_tokens=sum(item.input_tokens for item in known), output_tokens=0
+            )
+        return EmbeddingResponse(
+            vectors=vectors,
+            model=model,
+            usage=usage,
+            http_request_count=request_counter.count,
+        )
+
+    def _embedding_vectors(
+        self,
+        payload: dict[str, Any],
+        text_count: int,
+        request_counter: _RequestCounter,
+    ) -> list[list[float]]:
+        """Validate one embedding response and return its vectors in input order."""
+
         data = payload.get("data")
         if not isinstance(data, list):
             self._raise_sanitized(
@@ -271,12 +381,24 @@ class OpenAICompatibleProvider:
                 )
             ordered.append((index, [float(value) for value in embedding]))
         ordered.sort(key=lambda item: item[0])
-        if len(ordered) != len(texts):
+        if len(ordered) != text_count:
             self._raise_sanitized(
                 "embedding response count does not match input",
                 http_request_count=request_counter.count,
             )
         return [embedding for _, embedding in ordered]
+
+    @staticmethod
+    def _embedding_usage(payload: dict[str, Any]) -> TokenUsage | None:
+        """Read reported embedding input tokens; unknown usage stays None."""
+
+        usage = payload.get("usage")
+        if not isinstance(usage, dict):
+            return None
+        prompt_tokens = usage.get("prompt_tokens")
+        if not isinstance(prompt_tokens, int) or prompt_tokens < 0:
+            return None
+        return TokenUsage(input_tokens=prompt_tokens, output_tokens=0)
 
     def judge(
         self,

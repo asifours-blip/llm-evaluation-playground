@@ -17,6 +17,14 @@ from rag_quality_lab.config import (
     load_yaml_model,
     validate_dataset_corpus,
 )
+from rag_quality_lab.config.holdout import (
+    HoldoutTampered,
+    freeze_holdout,
+    holdout_lock_path,
+    load_holdout_lock,
+    split_summary,
+    verify_holdout,
+)
 from rag_quality_lab.domain.models import (
     Answerability,
     EvaluationDataset,
@@ -39,7 +47,8 @@ from rag_quality_lab.experiments import (
     run_experiment,
     run_pairwise_comparison,
 )
-from rag_quality_lab.experiments.runner import planned_calls
+from rag_quality_lab.experiments.compare import compare_arms, require_pairable
+from rag_quality_lab.experiments.runner import planned_calls, resume_experiment
 from rag_quality_lab.experiments.store import ExperimentStore
 from rag_quality_lab.metrics.calibration import (
     AnnotationSnapshot,
@@ -57,7 +66,9 @@ from rag_quality_lab.providers import (
     OpenAICompatibleProvider,
     ProviderError,
 )
+from rag_quality_lab.providers.fake import is_local_embedding_model
 from rag_quality_lab.reporting import generate_reports
+from rag_quality_lab.reporting.report import generate_comparison_report
 from rag_quality_lab.retrieval.index import load_documents
 
 CommandHandler = Callable[[argparse.Namespace], int]
@@ -80,6 +91,34 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--preflight-only", action="store_true")
     run.set_defaults(handler=_handle_run)
 
+    resume = subcommands.add_parser(
+        "resume", help="resume an interrupted experiment from its checkpoint"
+    )
+    resume.add_argument("--experiment", required=True)
+    resume.add_argument("--config", required=True, type=Path)
+    resume.add_argument("--artifact-dir", type=Path)
+    resume.add_argument("--confirm-live-run", action="store_true")
+    resume.add_argument(
+        "--retry-unknown",
+        action="store_true",
+        help="re-send case arms whose outcome is unknown; they are charged again",
+    )
+    resume.set_defaults(handler=_handle_resume)
+
+    cancel = subcommands.add_parser(
+        "cancel", help="stop an experiment from claiming further cases"
+    )
+    cancel.add_argument("--experiment", required=True)
+    cancel.add_argument("--database", required=True, type=Path)
+    cancel.set_defaults(handler=_handle_cancel)
+
+    status = subcommands.add_parser(
+        "status", help="show lifecycle, progress, and spend of stored experiments"
+    )
+    status.add_argument("--experiment")
+    status.add_argument("--database", required=True, type=Path)
+    status.set_defaults(handler=_handle_status)
+
     report = subcommands.add_parser("report", help="regenerate a stored report")
     report.add_argument("--database", required=True, type=Path)
     report.add_argument("--experiment", required=True)
@@ -88,9 +127,33 @@ def build_parser() -> argparse.ArgumentParser:
     report.add_argument("--baseline")
     report.set_defaults(handler=_handle_report)
 
-    compare = subcommands.add_parser("compare", help="compare two stored experiments")
+    compare = subcommands.add_parser(
+        "compare",
+        help="compare two stored experiments, or two configuration arms question by question",
+    )
     _add_comparison_arguments(compare)
+    compare.add_argument("--baseline-config")
+    compare.add_argument("--candidate-config")
+    compare.add_argument("--output", type=Path)
     compare.set_defaults(handler=_handle_compare)
+
+    dataset = subcommands.add_parser(
+        "dataset", help="inspect dataset splits and freeze or verify the holdout"
+    )
+    dataset_commands = dataset.add_subparsers(dest="dataset_command", required=True)
+    splits = dataset_commands.add_parser("splits", help="show splits, labels, and holdout state")
+    splits.add_argument("--dataset", required=True, type=Path)
+    splits.set_defaults(handler=_handle_dataset_splits)
+    freeze = dataset_commands.add_parser(
+        "freeze-holdout", help="record the holdout hash of this dataset version"
+    )
+    freeze.add_argument("--dataset", required=True, type=Path)
+    freeze.set_defaults(handler=_handle_dataset_freeze)
+    verify = dataset_commands.add_parser(
+        "verify", help="check that a frozen holdout is unchanged"
+    )
+    verify.add_argument("--dataset", required=True, type=Path)
+    verify.set_defaults(handler=_handle_dataset_verify)
 
     regression = subcommands.add_parser("regression", help="evaluate regression rules")
     regression.add_argument("--fixture", type=Path)
@@ -134,6 +197,27 @@ def build_parser() -> argparse.ArgumentParser:
     pairwise.add_argument("--confirm-live-run", action="store_true")
     pairwise.add_argument("--preflight-only", action="store_true")
     pairwise.set_defaults(handler=_handle_pairwise)
+
+    serve = subcommands.add_parser(
+        "serve", help="run the local workbench (dataset/config browsing, runs, reports)"
+    )
+    serve.add_argument("--host", default="127.0.0.1")
+    serve.add_argument("--port", type=int, default=8765)
+    serve.add_argument(
+        "--allow-live",
+        action="store_true",
+        help="permit live (paid) runs started from the workbench; offline by default",
+    )
+    serve.add_argument(
+        "--workspace",
+        type=Path,
+        default=Path.cwd(),
+        help=(
+            "root directory every request-supplied path must resolve inside "
+            "(default: the current working directory)"
+        ),
+    )
+    serve.set_defaults(handler=_handle_serve)
     return parser
 
 
@@ -154,14 +238,49 @@ def _handle_validate(args: argparse.Namespace) -> int:
     config = load_experiment_config(args.config)
     dataset = load_dataset(config.dataset_path)
     validate_dataset_corpus(dataset, load_documents(config.knowledge_base_path))
+    holdout = verify_holdout(dataset, load_holdout_lock(holdout_lock_path(config.dataset_path)))
     _print_json(
         {
             "status": "valid",
             "mode": config.mode,
-            "case_count": len(dataset.cases),
+            "case_count": len(dataset.select_splits(config.splits).cases),
             "arm_count": len(config.retrieval),
+            "dataset_version": dataset.version,
+            "holdout_state": holdout.state,
         }
     )
+    return 0
+
+
+def _handle_dataset_splits(args: argparse.Namespace) -> int:
+    dataset = load_dataset(args.dataset)
+    _print_json(split_summary(dataset, load_holdout_lock(holdout_lock_path(args.dataset))))
+    return 0
+
+
+def _handle_dataset_freeze(args: argparse.Namespace) -> int:
+    dataset = load_dataset(args.dataset)
+    lock_path = holdout_lock_path(args.dataset)
+    freeze = freeze_holdout(dataset, lock_path)
+    _print_json({**freeze.model_dump(mode="json"), "lock_path": str(lock_path)})
+    return 0
+
+
+def _handle_dataset_verify(args: argparse.Namespace) -> int:
+    dataset = load_dataset(args.dataset)
+    try:
+        status = verify_holdout(dataset, load_holdout_lock(holdout_lock_path(args.dataset)))
+    except HoldoutTampered as error:
+        _print_json(
+            {
+                "dataset_name": dataset.name,
+                "dataset_version": dataset.version,
+                "state": "tampered",
+                "error": str(error),
+            }
+        )
+        return 1
+    _print_json(status.model_dump(mode="json"))
     return 0
 
 
@@ -184,6 +303,59 @@ def _handle_run(args: argparse.Namespace) -> int:
         raise ValueError("--preflight-only is only valid for live configurations")
 
     record = run_experiment(config, _provider_bundle(config, dataset), dataset)
+    return _publish_run(config, record)
+
+
+def _handle_resume(args: argparse.Namespace) -> int:
+    config = load_experiment_config(args.config)
+    if args.artifact_dir is not None:
+        config = config.model_copy(update={"artifact_dir": args.artifact_dir})
+    if config.mode == "live" and not args.confirm_live_run:
+        raise ValueError("live resumes require --confirm-live-run")
+    dataset = load_dataset(config.dataset_path)
+    with ExperimentStore(config.database_path) as store:
+        experiment_id = store.resolve_experiment_id(args.experiment)
+    record = resume_experiment(
+        experiment_id,
+        config,
+        _provider_bundle(config, dataset),
+        dataset,
+        retry_unknown=args.retry_unknown,
+    )
+    return _publish_run(config, record)
+
+
+def _handle_cancel(args: argparse.Namespace) -> int:
+    with ExperimentStore(args.database) as store:
+        experiment_id = store.resolve_experiment_id(args.experiment)
+        status = store.request_cancel(experiment_id)
+    _print_json(
+        {
+            "experiment_id": experiment_id,
+            "status": status.value,
+            "cancel_requested": True,
+        }
+    )
+    return 0
+
+
+def _handle_status(args: argparse.Namespace) -> int:
+    with ExperimentStore(args.database) as store:
+        store.reap_orphans()
+        if args.experiment is not None:
+            payload = store.progress(store.resolve_experiment_id(args.experiment))
+        else:
+            payload = {
+                "experiments": [
+                    store.progress(experiment_id)
+                    for experiment_id in store.experiment_ids()
+                ]
+            }
+    _print_json(payload)
+    return 0
+
+
+def _publish_run(config: ExperimentConfig, record: ExperimentRecord) -> int:
     paths = generate_reports(record, config.artifact_dir)
     with ExperimentStore(config.database_path) as store:
         store.record_artifact(
@@ -198,15 +370,18 @@ def _handle_run(args: argparse.Namespace) -> int:
             path=str(paths.html),
             sha256=paths.html_sha256,
         )
-    _print_json(
-        {
-            "experiment_id": record.id,
-            "status": record.status.value,
-            "report_json": str(paths.json.resolve()),
-            "report_html": str(paths.html.resolve()),
-            "summary": record.summary,
-        }
-    )
+    payload: dict[str, object] = {
+        "experiment_id": record.id,
+        "status": record.status.value,
+        "report_json": str(paths.json.resolve()),
+        "report_html": str(paths.html.resolve()),
+        "summary": record.summary,
+    }
+    if record.unknown_calls:
+        payload["unknown_outcome_task_keys"] = sorted(
+            {call.task_key for call in record.unknown_calls}
+        )
+    _print_json(payload)
     return 0 if record.status is ExperimentStatus.COMPLETED else 1
 
 
@@ -246,11 +421,35 @@ def _handle_report(args: argparse.Namespace) -> int:
 
 
 def _handle_compare(args: argparse.Namespace) -> int:
+    arms = (args.baseline_config, args.candidate_config)
+    if any(arm is not None for arm in arms) and not all(arm is not None for arm in arms):
+        raise ValueError("--baseline-config and --candidate-config must be given together")
     with ExperimentStore(args.database) as store:
         baseline = store.get_experiment(store.resolve_experiment_id(args.baseline))
         candidate = store.get_experiment(store.resolve_experiment_id(args.candidate))
-    comparison = compare_experiments(baseline, candidate)
-    _print_json(comparison.model_dump(mode="json"))
+    if args.baseline_config is None:
+        if args.output is not None:
+            raise ValueError("--output requires --baseline-config and --candidate-config")
+        comparison = compare_experiments(baseline, candidate)
+        _print_json(comparison.model_dump(mode="json"))
+        return 0
+    paired = compare_arms(baseline, candidate, args.baseline_config, args.candidate_config)
+    if args.output is None:
+        _print_json(paired.model_dump(mode="json"))
+        return 0
+    paths = generate_comparison_report(paired, args.output)
+    _print_json(
+        {
+            "report_json": str(paths.json.resolve()),
+            "report_html": str(paths.html.resolve()),
+            "json_sha256": paths.json_sha256,
+            "html_sha256": paths.html_sha256,
+            "config_differences": [
+                difference.model_dump(mode="json") for difference in paired.config_differences
+            ],
+            "warning": paired.warning,
+        }
+    )
     return 0
 
 
@@ -457,6 +656,8 @@ def _handle_pairwise(args: argparse.Namespace) -> int:
         candidate_id = store.resolve_experiment_id(args.candidate)
         baseline = store.get_experiment(baseline_id)
         candidate = store.get_experiment(candidate_id)
+        # Refuse mismatched conditions before planning or sending any request.
+        require_pairable(baseline, candidate, args.baseline_config, args.candidate_config)
         pair_count = _pairwise_case_count(
             baseline,
             candidate,
@@ -538,6 +739,28 @@ def _handle_pairwise(args: argparse.Namespace) -> int:
         }
     )
     return int(record.summary["failure_count"] > 0)
+
+
+def _handle_serve(args: argparse.Namespace) -> int:
+    from rag_quality_lab.web import serve
+
+    server = serve(
+        host=args.host, port=args.port, allow_live=args.allow_live, workspace=args.workspace
+    )
+    mode = "live runs allowed" if args.allow_live else "offline only"
+    workspace = Path(args.workspace).resolve()
+    print(
+        f"rag-quality workbench on http://{args.host}:{args.port} ({mode}); "
+        f"workspace={workspace}; Ctrl+C to stop"
+    )
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.shutdown()
+        server.server_close()
+    return 0
 
 
 def _pairwise_case_count(
@@ -623,10 +846,12 @@ def _provider_bundle(
         timeout_seconds=config.provider.timeout_seconds,
         max_retries=config.provider.max_retries,
         extra_body=_provider_extra_body(config),
+        embedding_batch_size=config.provider.embedding_batch_size,
+        embedding_batch_token_limit=config.provider.embedding_batch_token_limit,
     )
     embedding = (
         FakeEmbeddingProvider(_fake_dimensions(config))
-        if config.provider.embedding_model.startswith("fake-hash")
+        if is_local_embedding_model(config.provider.embedding_model)
         else chat
     )
     return ProviderBundle(
@@ -642,7 +867,7 @@ def _live_preflight(
     if config.pricing_path is None:
         raise ValueError("live experiments require a pricing file")
     pricing = load_yaml_model(config.pricing_path, PricingConfig)
-    plan = planned_calls(config, len(dataset.cases) * len(config.retrieval))
+    plan = planned_calls(config, dataset, load_documents(config.knowledge_base_path))
     decision = preflight_budget(
         planned=plan,
         pricing=pricing,
