@@ -2,95 +2,65 @@
 
 [![CI](https://github.com/asifours-blip/llm-evaluation-playground/actions/workflows/ci.yml/badge.svg)](https://github.com/asifours-blip/llm-evaluation-playground/actions/workflows/ci.yml)
 
-调整 RAG 的切片、检索和提示词后，需要知道结果为什么变了、哪些问题仍答不好，以及一次实验花了多少。RAG Quality Lab 把这些信息保存在同一份实验记录里，让检索、回答、拒答和成本可以分别检查、逐题比较。
+改了一下切片大小，准确率从 70% 变成 72%，这到底是真的变好了，还是换了几道题碰巧答对了？这次实验又花了多少钱？
 
-它提供命令行和本地 Web 工作台，适合围绕一份小型知识库建立基线、分析失败并保留可复查的报告。
-
-## 使用流程
+RAG Quality Lab 是一个本地运行的 RAG 评测工具，专门回答这类问题。它把检索、回答、拒答和成本拆开来记录，每道题的结果都能逐条对比，每次实验用的代码版本、数据、配置和定价都会冻结下来，事后可以复查。
 
 ```mermaid
 flowchart LR
-    A[知识库与版本化题集] --> B[选择检索和模型配置]
-    B --> C[校验输入与预算]
-    C --> D[执行实验]
-    D --> E[逐题结果与调用账本]
-    E --> F[报告与成对比较]
-    F --> G[在开发集调整配置]
-    G --> B
-    F --> H[单列冻结留出集结果]
+    A[知识库 + 版本化题集] --> B[选择检索与模型配置]
+    B --> C[预算预检]
+    C --> D[执行实验<br/>逐题落库]
+    D --> E[报告与逐题对比]
+    E -->|在开发集上调参| B
+    E --> F[冻结的留出集<br/>单独报告]
 ```
 
-## 它能做什么
+## 它帮我发现了什么
 
-- **组织实验**：在 CLI 或本地工作台查看数据集与配置，启动离线实验，检查状态并生成报告。
-- **比较检索**：选择哈希向量或 BM25 本地基线，查看命中证据、排名及不同配置的逐题差异。
-- **分开衡量质量**：独立报告检索、答案、拒答和 Judge 指标，避免平均分遮住某类失败。
-- **控制调用与恢复**：请求前预留预算，中断后继续未完成部分；已完成结果不重复请求，未知结果默认不重发。
-- **管理证据**：保存配置、数据与提示词哈希、代码版本和逐次调用记录，冻结留出集并导出 JSON / HTML 报告。
+用 DeepSeek 跑的一次 384 组完整实验里，模型对**本该拒答**的问题，约 61.5% 给出了实质性回答（[原始数据](docs/artifacts/live-384-2026-08-21/evidence-summary.json)）。平均分看不出这个问题，拆开来按题型统计才暴露出来。这正是这个工具想做到的：让问题有据可查，而不是被一个总分掩盖。
 
-## 工程取舍
+## 几个值得一说的设计
 
-| 问题 | 处理方式 | 可核查位置 |
-| --- | --- | --- |
-| 索引和指标计算也可能调用远程 embedding | 预算覆盖索引、查询、答案 embedding 与生成、Judge；按批次预留和结算，缺少单价时拒绝发送 | [执行器](src/rag_quality_lab/experiments/runner.py) · [预算说明](docs/architecture.md#预算安全) |
-| 中断后重跑可能重复付费 | 持久化执行状态与账本；已发出但未结算的调用记为未知，恢复沿用已花费金额 | [存储实现](src/rag_quality_lab/experiments/store.py) · [恢复规则](docs/reference.md#中断恢复与取消) |
-| 小语料不必引入向量数据库 | 内存检索保留确定性哈希与 BM25 两个本地基线，减少额外服务依赖 | [检索模块](src/rag_quality_lab/retrieval/) · [基线说明](docs/reference.md#检索基线) |
-| 改题或混合调参会影响结论 | 冻结留出题内容；比较先校验语料、题集与种子，不同参数超过一个时提示无法单变量归因 | [冻结实现](src/rag_quality_lab/config/holdout.py) · [比较规则](docs/reference.md#成对比较与单变量约束) |
-| Judge 分数需要解释依据 | 盲标导出隐藏模型及配置，校准后判断能否作为阻断指标；双顺序比较记录位置敏感结果 | [校准模块](src/rag_quality_lab/metrics/calibration.py) · [标注流程](docs/reference.md#judge-人工盲标) |
-| 工作台操作会读写本地文件 | 路径限制在 workspace，写操作使用同源 JSON POST；报告复用 CLI 实现 | [Web 实现](src/rag_quality_lab/web/) · [工作台测试](tests/web/) |
+**钱花在哪里都要先算清楚。** 每一次外部调用都要先过预算预检，包括建索引、向量化查询、生成答案和 Judge 打分，预检通过才会发出请求。某个模型缺少单价就直接拒绝运行，不会按 0 元计算。开发中发现过建索引的调用绕过了预算，修复之后补了[回归测试](tests/experiments/test_embedding_budget_boundary.py)。
+
+**中断了可以接着跑，不会重复花钱。** 每道题的执行状态和预算账本都会持久化。进程被杀掉后恢复运行，已完成的题不会重新请求，预算从已经花掉的金额接着算。请求已经发出、但结果不确定的调用，按上限计入费用，并且默认不自动重发。
+
+**比较结果之前，先确认是公平比较。** 两组配置只有在语料、题集、随机种子都相同的情况下才允许成对比较；如果改动的参数超过一个，报告顶部会提醒"差异不能归因于单一改动"。题集分成开发集和留出集，留出集冻结后，任何改动都会被检测出来并拒绝使用。
+
+**给出两个本地检索基线。** 哈希向量和 BM25 都不依赖外部服务，结果完全可以复现，方便判断"换成真实向量模型之后，提升到底有多少"。
+
+**附带一个轻量 Web 工作台。** 只用 Python 标准库实现，和命令行共用同一套逻辑，两边生成的报告逐字节一致。服务默认只允许离线运行，请求路径限制在工作目录之内，写操作只接受同源请求。
 
 ## 技术栈
 
-Python、Pydantic、SQLite、Jinja2；标准库 HTTP 工作台；OpenAI 兼容 HTTP 客户端。pytest、Ruff 与 mypy 提供离线质量检查。
+Python 3.11 · Pydantic · SQLite · Jinja2 · OpenAI 兼容 HTTP 客户端 · pytest / Ruff / mypy · GitHub Actions
 
-## 快速开始
-
-需要 Python 3.11+。在仓库根目录创建虚拟环境后运行；安装需要下载依赖，以下实验使用本地替身，不读取模型密钥。
+## 本地运行
 
 ```bash
-python -m venv .venv
-# Linux/macOS: source .venv/bin/activate
-# Windows PowerShell: .venv/Scripts/Activate.ps1
-python -m pip install -e ".[dev]"
-rag-quality validate --config configs/offline.yaml
-rag-quality run --config configs/offline.yaml
-rag-quality serve --workspace .
+python -m venv .venv && source .venv/bin/activate   # Windows：.venv\Scripts\Activate.ps1
+pip install -e ".[dev]"
+rag-quality run --config configs/offline.yaml        # 离线实验，不需要模型密钥
+rag-quality serve --workspace .                      # 工作台：http://127.0.0.1:8765
 ```
 
-工作台默认地址为 `http://127.0.0.1:8765`，默认不允许真实调用。CLI 输出实验 ID 与报告位置；完整命令、恢复、批量 embedding、定价与校准操作见[运行参考](docs/reference.md)，备份入口见[备份脚本](scripts/backup_restore.py)。
-
-## 验证状态
-
-截至代码提交 [`d87a35d`](https://github.com/asifours-blip/llm-evaluation-playground/commit/d87a35d18308d74fe5328fd7a7e0d2ce8bc3ca99)，[CI 36456756848](https://github.com/asifours-blip/llm-evaluation-playground/actions/runs/36456756848) 成功：检查源码与测试类型、离线测试、聚焦模块覆盖率及固定回归基线。它不执行真实模型实验。
-
-历史模型产物与当前软件能力分别记录：
-
-| 证据 | 能说明什么 | 不应外推的结论 |
-| --- | --- | --- |
-| [离线报告](docs/artifacts/offline-summary.json) | 执行、存储和报告可复查 | 替身答案分数不是模型质量 |
-| [历史完整矩阵](docs/artifacts/live-384-2026-08-21/evidence-summary.json) | 2026-08-21 的逐题结果、HTTP 计数与费用 | 执行完成不代表回答质量达标 |
-| [数据集版本复核](docs/dataset-v1.1-review.md) | 切分方法、冻结内容和复核来源 | 题目曾被历史实验使用，不是全新未见样本 |
-
-实验编号、精确数值与校准限定保留在[详细参考](docs/reference.md#已验证状态)和原始产物中，不以历史成绩代替新增功能的效果验证。
+真实模型实验、中断恢复、成对比较和人工盲标等完整用法见[运行参考](docs/reference.md)。
 
 ## 文档
 
-| 文档 | 内容 |
-| --- | --- |
-| [系统架构](docs/architecture.md) | 模块、实验身份、并发与预算 |
-| [运行参考](docs/reference.md) | 完整命令、状态迁移、基线、留出集、比较与校准 |
-| [数据集复核](docs/dataset-v1.1-review.md) | 切分复现、逐题意见与样本边界 |
-| [设计规格](docs/design-spec.md) | 设计约束与原始方案 |
-| [调用计数设计](docs/superpowers/specs/2026-08-21-http-attempt-observability-design.md) | 物理 HTTP 尝试计数与历史兼容 |
-| [历史实验产物](docs/artifacts/) | 规范化结果、报告、费用与标注记录 |
+- [系统架构](docs/architecture.md)：模块划分、实验身份、预算安全
+- [运行参考](docs/reference.md)：全部命令、状态流转、检索基线、比较规则
+- [数据集复核](docs/dataset-v1.1-review.md)：留出集怎么划分，每道题的复核意见
+- [历史实验产物](docs/artifacts/)：原始结果、费用和标注记录
 
-## 局限
+## 目前的边界
 
-- 本地哈希与 BM25 是检索基线；离线答案由替身提供，不能据此宣称真实 RAG 效果优秀。
-- 数据集规模有限，当前冻结的留出题曾进入历史实验；尚无该版本留出集的实验结果，复核由 AI 完成，见[数据集说明](docs/dataset-v1.1-review.md)。
-- 历史 Judge 校准样本较少且部分偏容易，不能外推到困难样本；历史不理想结果仍保留在[原始摘要](docs/artifacts/live-384-2026-08-21/evidence-summary.json)。
-- SQLite 与本地工作台面向单机使用，不提供多租户服务；真实调用前需重新核对定价、配置与预算。
+- 题集只有 48 道题，适合做回归和方法验证，不足以支撑大范围的统计结论。
+- 留出集的 16 道题在划分之前被历史实验用过，因此只能保证之后的调参不碰它；题目复核是由 AI 完成的。
+- Judge 的人工校准样本较少，而且偏向简单题，校准结论不宜推广到困难题。
+- 这是一个单机工具，不支持多用户同时使用。
 
-## 仓库历史
+---
 
-项目由早期 LangChain 演示重写为 `rag_quality_lab`，仓库名 `llm-evaluation-playground` 保留旧链接。后续增加预算账本、实验恢复、基线比较与工作台；历史导入不代表线上迭代周期。
+仓库最早是一个 LangChain 演示项目，后来重写为现在的 `rag_quality_lab`；仓库名 `llm-evaluation-playground` 为了保留旧链接没有改。
