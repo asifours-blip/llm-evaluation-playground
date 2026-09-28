@@ -4,7 +4,7 @@
 
 RAG Quality Lab 是单机评测系统，不是在线问答服务。它优化的是实验可信度：同一份配置能够重跑，检索与生成失败能够分辨，成本在请求发出前能够阻断，报告中的结论能够回到逐题记录。
 
-当前 M1 支持确定性离线闭环和 OpenAI-compatible live 生成。FastAPI 仪表盘、向量数据库、Docker 和多版本 CI 属于主动降级的 M3 展示项，不是闭环的必要条件。
+当前支持确定性离线实验、OpenAI-compatible 生成、预算账本与中断恢复、BM25 基线、数据集冻结和标准库 HTTP 工作台。工作台复用 CLI 的实验与报告实现。早期 M3 设想中的 FastAPI 仪表盘未采用；向量数据库、Docker 和多版本 CI 不属于当前实现。完整命令见 [运行参考](reference.md)。
 
 ## 数据流
 
@@ -17,7 +17,7 @@ ExperimentConfig ─┬─ provider / retrieval matrix / budget
                                |
               deterministic chunking + embedding cache
                                |
-                 in-memory brute-force cosine search
+                 in-memory cosine search / BM25
                                |
               StructuredAnswer(answer/citations/abstained)
                                |
@@ -41,13 +41,14 @@ ExperimentConfig ─┬─ provider / retrieval matrix / budget
 |---|---|---|
 | `domain` | Pydantic 数据集、配置、结果和生命周期模型 | 跨字段不变量在模型边界拒绝 |
 | `config` | UTF-8 JSON/YAML 加载与价格币种验证 | 相对价格路径相对配置文件解析 |
-| `retrieval` | Markdown 加载、稳定切片、缓存、暴力余弦检索 | 无外部向量库；相同输入产生相同 chunk ID |
+| `retrieval` | Markdown 加载、稳定切片、缓存、余弦检索与 BM25 | 无外部向量库；相同输入产生相同 chunk ID |
 | `providers` | 窄协议、确定性 fake、OpenAI-compatible HTTP | Key 只从环境变量读取；401/403 不重试；错误脱敏 |
 | `prompts` | `direct` / `evidence_first` 固定指令与哈希 | Prompt 变更进入实验身份 |
 | `metrics` | 检索、答案、拒答、Judge 与人工校准纯函数 | Judge 未校准时不得作为阻断指标 |
 | `experiments` | 并发协调、预算预留/结算、SQLite、比较和回归 | Provider 可并发；数据库只由主线程写 |
 | `reporting` | 规范化 JSON、自包含 HTML、产物哈希 | Mock 默认 `mock`，live 默认 `pilot`，不可自动冒充 final |
 | `cli` | 安全装配上述模块 | Live 需要 `--confirm-live-run`；预检先于 API Key 读取 |
+| `web` | 本地数据集、配置、执行状态和报告入口 | 默认禁止真实调用；路径限于 workspace，写操作要求同源 JSON POST |
 
 ## 为什么不用向量数据库
 
@@ -86,7 +87,7 @@ Live 运行的安全链条如下：
 5. 每个任务调度前原子预留生成、Judge 以及远程 embedding 查询/答案的最坏成本，完成后按 provider usage 结算；失败时结算已知 usage，只对已经尝试但 usage 不可得的阶段按预留上限估算；
 6. 完整矩阵的缓冲预检不通过时零请求退出（索引 embedding 也在预检通过后才发出）；运行中下一次预留可能越过硬上限时停止调度并持久化 `budget_exceeded`。
 
-远程 embedding 分三个 phase 计划与记录：`embedding_index`（每个 arm 一次批量，仅扣除按 provider、模型、chunk 内容与切分方式校验命中的缓存）、`embedding_query`（每题一次）和 `embedding_answer`（每题一次；生成答案超过预留字节上限时不发送，该题记为 metrics 失败）。每次批量的 usage、物理 HTTP 次数、成本及是否估算写入 `embedding_calls` 表；索引阶段失败时实验仍保留 `failed` 记录和已发请求数。本地 `fake-hash` embedding 不发请求，不进入计划。
+远程 embedding 分三个 phase 计划与记录：`embedding_index`、`embedding_query` 和 `embedding_answer`。每个 phase 按文本数与 token 上界分批，逐批记录 usage、物理 HTTP 次数、成本及是否估算。索引只扣除已校验的缓存；BM25 不发索引和查询 embedding，但答案相似度仍使用配置的 embedding。生成答案超过预留字节上限时不发送该阶段请求，该题记为 metrics 失败；索引失败也保留已发请求记录。本地 `fake-hash` 不发请求。未设置分批限制时沿用单批行为，完整规则见 [Embedding 分批](reference.md#embedding-分批)。
 
 价格证据是历史快照，不覆盖更新。真实运行前必须从官方来源新增当日价格文件。
 
@@ -100,7 +101,7 @@ Pairwise 不是未接线的 helper：CLI 对匹配的 `(case_id, model)` 输出�
 
 ## 测试策略
 
-- `domain/config/metrics/budget/compare` 聚焦逻辑执行 branch coverage 门禁，当前为 95.53%；
+- `domain/config/metrics/budget/compare` 聚焦逻辑执行 branch coverage 门禁；95.53% 是 [早期记录](reference.md#已验证状态)，当前结果以对应提交的 CI 为准；
 - provider 用窄 HTTP session fake 验证重试、鉴权、脱敏、结构化修复和 usage 解析；
 - runner/store/report/CLI 用集成测试验证真实文件、SQLite、子进程和报告行为；
 - CI 排除 `live` marker，不读取 Key、不产生付费请求；
@@ -112,4 +113,4 @@ Pairwise 不是未接线的 helper：CLI 对匹配的 `(case_id, model)` 输出�
 - M1 Mock 只能证明软件闭环，不能证明 LLM 质量；
 - Live 生成、Judge、预算闸门和人工校准已有提交产物（96-arm 与 384-arm final）；历史 `544dcc6e` 缺少精确 HTTP 计数并保持冻结。对比句仍须 `compare`/`pairwise`，禁止手算；
 - 需要多 worker 写入或远程查询时再迁移 PostgreSQL；
-- 需要交互式探索时可增加只读仪表盘，但不能替代规范化报告。
+- 当前本地工作台可启动实验和生成报告，不是只读页面；路径与写请求边界见 [Web 测试](../tests/web/)，规范化报告仍是可复查产物。
