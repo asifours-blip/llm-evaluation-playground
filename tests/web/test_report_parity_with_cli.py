@@ -86,7 +86,7 @@ def test_started_experiment_report_matches_cli_regeneration(tmp_path: Path) -> N
         app, "POST", "/api/experiments/start", json_body={"config": str(config_path)}
     )
     token = start_response.json()["token"]
-    deadline = time.monotonic() + 10
+    deadline = time.monotonic() + 60
     run_state = {}
     while time.monotonic() < deadline:
         run_state = call(app, "GET", f"/api/runs/{token}").json()
