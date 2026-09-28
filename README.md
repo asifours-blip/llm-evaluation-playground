@@ -137,10 +137,12 @@ BM25 自行实现、无新依赖：Okapi BM25，k1=1.2、b=0.75，idf = ln(1 + (
 数据集文件的 `version` 是显式版本；内容哈希（`dataset_hash`）覆盖全部字段。每道题可标注：`difficulty`（easy/medium/hard）、`answerability`（answerable/unanswerable）、`review`（`status`: unreviewed/approved/rejected，通过或驳回必须有 `reviewer` 与 `reviewed_at`）、`split`（dev/holdout）。旧数据集文件可直接读取：缺失的难度、复核、切分为空，报告与 `dataset splits` 中显示为「未标注」；未设置的标签不进入哈希，所以现有数据集的 `dataset_hash` 不变。`answerability` 决定指标口径，没有安全的默认值，仍为必填。
 
 ```bash
-rag-quality dataset splits --dataset data/eval/rag_quality_v1.json
-rag-quality dataset freeze-holdout --dataset data/eval/rag_quality_v1.json
-rag-quality dataset verify --dataset data/eval/rag_quality_v1.json
+rag-quality dataset splits --dataset data/eval/rag_quality_v1.1.json
+rag-quality dataset freeze-holdout --dataset data/eval/rag_quality_v1.1.json
+rag-quality dataset verify --dataset data/eval/rag_quality_v1.1.json
 ```
+
+`rag_quality_v1.1.json`（1.1.0）是在 1.0.0 基础上按固定种子分层抽样得到的切分（dev 32 / holdout 16，holdout 已冻结），并附复核标签；抽样命令、逐题复核结论和局限见 [docs/dataset-v1.1-review.md](docs/dataset-v1.1-review.md)。1.0.0 文件保持不变，已归档实验仍引用它。
 
 冻结把「数据集名 + 版本」下所有 holdout 题目的完整内容哈希写入同目录的 `<数据集>.holdout-lock.json`（应提交入库，Git 历史即冻结审计记录）。之后该版本的 holdout 有任何改动（改题、把题移入或移出 holdout）都会被 `verify`（退出码 1）和 `validate`/`run`/`resume` 拒绝；只修改 dev 题不影响冻结。要改动 holdout，只能提升 `version` 建立新版本：新版本在冻结前可以运行，但报告会标明 holdout 未冻结、不是留出证据；同一版本不能用不同内容重复冻结。
 
@@ -201,7 +203,7 @@ rag-quality regression --fixture tests/fixtures/offline_baseline.json
 ## 局限
 
 - 哈希 embedding 故意只作为便宜、可复现的检索弱基线；不能代表生产 embedding，也不能把其 answer F1 或 false-answer rate 包装为 RAG 效果优秀。BM25 是第二个本地词法基线，同样不代表生产检索质量；新增基线不改变已归档实验（包括 384-arm live final 约 61.5% 的 false-answer rate）的任何结论。
-- 现有 `rag_quality_v1.json` 尚未标注 split 与复核状态，报告中这些题目显示为「未标注」，不存在冻结的 holdout；在完成标注和冻结之前，本仓库没有任何结果可以作为留出验证展示。
+- `rag_quality_v1.json`（1.0.0）没有切分与复核标签，报告中显示为「未标注」。1.1.0 的 holdout 已冻结，但全部 48 题（含这 16 道 holdout）在切分前都已被历史实验使用过，所以它只对**之后的调参**保持留出，不能当作"未见过的题"的泛化证据；复核由 AI 按仓库所有者要求完成，不是独立人工标注。截至目前，本仓库还没有在 1.1.0 holdout 上跑过的实验结果。
 - 离线公开产物仍是 Mock，答案分数不可用于比较真实 LLM。Live 数字必须引用对应 final 报告，且检索仍是哈希 embedding 弱基线。
 - 48 题适合回归与示例讲解，不足以形成广泛统计结论。
 - Judge 校准是 n=12：96-arm 有区分度，384-arm 偏易定义题；都不能外推为大规模 Judge 可靠性。历史 `544dcc6e` 缺少精确 HTTP 计数；新 final 必须绑定**同一 experiment** 的完整 HTTP 计数与人工校准。
