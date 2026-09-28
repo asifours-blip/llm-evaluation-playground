@@ -197,6 +197,18 @@ def build_parser() -> argparse.ArgumentParser:
     pairwise.add_argument("--confirm-live-run", action="store_true")
     pairwise.add_argument("--preflight-only", action="store_true")
     pairwise.set_defaults(handler=_handle_pairwise)
+
+    serve = subcommands.add_parser(
+        "serve", help="run the local workbench (dataset/config browsing, runs, reports)"
+    )
+    serve.add_argument("--host", default="127.0.0.1")
+    serve.add_argument("--port", type=int, default=8765)
+    serve.add_argument(
+        "--allow-live",
+        action="store_true",
+        help="permit live (paid) runs started from the workbench; offline by default",
+    )
+    serve.set_defaults(handler=_handle_serve)
     return parser
 
 
@@ -718,6 +730,22 @@ def _handle_pairwise(args: argparse.Namespace) -> int:
         }
     )
     return int(record.summary["failure_count"] > 0)
+
+
+def _handle_serve(args: argparse.Namespace) -> int:
+    from rag_quality_lab.web import serve
+
+    server = serve(host=args.host, port=args.port, allow_live=args.allow_live)
+    mode = "live runs allowed" if args.allow_live else "offline only"
+    print(f"rag-quality workbench on http://{args.host}:{args.port} ({mode}); Ctrl+C to stop")
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.shutdown()
+        server.server_close()
+    return 0
 
 
 def _pairwise_case_count(
