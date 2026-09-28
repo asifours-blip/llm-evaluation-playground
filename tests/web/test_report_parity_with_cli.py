@@ -56,9 +56,9 @@ def test_web_report_matches_cli_report(tmp_path: Path) -> None:
     app = create_app(allow_live=False, workspace=tmp_path)
     web_report = call(
         app,
-        "GET",
+        "POST",
         f"/api/experiments/{experiment_id}/report",
-        query=f"database={database_path}&output={web_output_dir}",
+        json_body={"database": str(database_path), "output": str(web_output_dir)},
     )
     assert web_report.status_code == 200
     web_body = web_report.json()
@@ -119,9 +119,9 @@ def test_started_experiment_report_matches_cli_regeneration(tmp_path: Path) -> N
     web_output_dir = tmp_path / "web-report"
     web_report = call(
         app,
-        "GET",
+        "POST",
         f"/api/experiments/{experiment_id}/report",
-        query=f"database={database_path}&output={web_output_dir}",
+        json_body={"database": str(database_path), "output": str(web_output_dir)},
     )
     assert web_report.status_code == 200
     web_body = web_report.json()

@@ -192,20 +192,26 @@ async function loadResults() {
 }
 async function generateReport() {
   try {
-    const url = '/api/experiments/' + encodeURIComponent(q('experiment-id')) + '/report?database=' +
-      encodeURIComponent(q('database-path')) + '&output=' + encodeURIComponent(q('output-dir'));
-    show('report-out', await callApi(url));
+    const url = '/api/experiments/' + encodeURIComponent(q('experiment-id')) + '/report';
+    const body = { database: q('database-path'), output: q('output-dir') };
+    show('report-out', await callApi(url, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+    }));
   } catch (e) { showError('report-out', e); }
 }
 async function compare() {
   try {
-    const url = '/api/compare?database=' + encodeURIComponent(q('database-path')) +
-      '&baseline=' + encodeURIComponent(q('baseline-id')) +
-      '&candidate=' + encodeURIComponent(q('experiment-id')) +
-      '&baseline_config=' + encodeURIComponent(q('baseline-config')) +
-      '&candidate_config=' + encodeURIComponent(q('candidate-config')) +
-      '&output=' + encodeURIComponent(q('output-dir'));
-    show('compare-out', await callApi(url));
+    const body = {
+      database: q('database-path'),
+      baseline: q('baseline-id'),
+      candidate: q('experiment-id'),
+      baseline_config: q('baseline-config'),
+      candidate_config: q('candidate-config'),
+      output: q('output-dir'),
+    };
+    show('compare-out', await callApi('/api/compare', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+    }));
   } catch (e) { showError('compare-out', e); }
 }
 </script>

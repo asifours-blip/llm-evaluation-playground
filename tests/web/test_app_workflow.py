@@ -89,9 +89,9 @@ def test_full_workbench_workflow(tmp_path: Path) -> None:
     output_dir = tmp_path / "reports"
     report = call(
         app,
-        "GET",
+        "POST",
         f"/api/experiments/{experiment_id}/report",
-        query=f"database={database_path}&output={output_dir}",
+        json_body={"database": str(database_path), "output": str(output_dir)},
     )
     assert report.status_code == 200
     report_body = report.json()

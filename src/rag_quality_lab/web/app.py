@@ -99,6 +99,10 @@ def route(method: str, pattern: str, name: str) -> None:
     _ROUTES.append((method, re.compile(f"^{pattern}$"), name))
 
 
+# Every GET route below must be read-only: no writing files, no starting or
+# resuming a run, no cancelling one. Anything with a side effect is POST and
+# goes through _check_post_safety() (same-origin, application/json only) in
+# _dispatch(); a GET on a POST-only path gets 405, not a quiet fallback.
 route("GET", r"/", "index")
 route("GET", r"/api/dataset", "dataset")
 route("GET", r"/api/config", "config")
@@ -106,12 +110,12 @@ route("GET", r"/api/precheck", "precheck")
 route("GET", r"/api/experiments", "list_experiments")
 route("GET", r"/api/experiments/(?P<experiment_id>[^/]+)", "experiment_detail")
 route("GET", r"/api/experiments/(?P<experiment_id>[^/]+)/results", "case_results")
-route("GET", r"/api/experiments/(?P<experiment_id>[^/]+)/report", "report")
 route("POST", r"/api/experiments/start", "start")
 route("POST", r"/api/experiments/(?P<experiment_id>[^/]+)/resume", "resume")
 route("POST", r"/api/experiments/(?P<experiment_id>[^/]+)/cancel", "cancel")
+route("POST", r"/api/experiments/(?P<experiment_id>[^/]+)/report", "report")
 route("GET", r"/api/runs/(?P<token>[^/]+)", "run_status")
-route("GET", r"/api/compare", "compare")
+route("POST", r"/api/compare", "compare")
 route("GET", r"/api/artifacts/download", "download")
 
 
@@ -149,9 +153,9 @@ def create_app(*, allow_live: bool = False, workspace: Path | str | None = None)
             )
         ),
         "report": (
-            lambda environ, params, query: _handle_report(params, query, resolved_workspace)
+            lambda environ, params, query: _handle_report(environ, params, resolved_workspace)
         ),
-        "compare": lambda environ, params, query: _handle_compare(query, resolved_workspace),
+        "compare": lambda environ, params, query: _handle_compare(environ, resolved_workspace),
         "download": lambda environ, params, query: _handle_download(query, resolved_workspace),
         "start": (
             lambda environ, params, query: _handle_start(environ, manager, resolved_workspace)
@@ -185,11 +189,13 @@ def _dispatch(
     query: Query,
     handlers: dict[str, Handler],
 ) -> Response:
+    methods_for_path: set[str] = set()
     for route_method, pattern, name in _ROUTES:
-        if route_method != method:
-            continue
         match = pattern.match(path)
         if match is None:
+            continue
+        methods_for_path.add(route_method)
+        if route_method != method:
             continue
         try:
             if method == "POST":
@@ -211,6 +217,11 @@ def _dispatch(
             return Response.error("404 Not Found", str(error))
         except (ValueError, PermissionError) as error:
             return Response.error("400 Bad Request", str(error))
+    if methods_for_path:
+        return Response.error(
+            "405 Method Not Allowed",
+            f"{method} not allowed for {path}; use {', '.join(sorted(methods_for_path))}",
+        )
     return Response.error("404 Not Found", f"no route for {method} {path}")
 
 
@@ -282,29 +293,34 @@ def _handle_case_results(params: Params, query: Query, workspace: Path) -> Respo
     return Response.json(page)
 
 
-def _handle_report(params: Params, query: Query, workspace: Path) -> Response:
-    database = _required_workspace_path(query, "database", workspace)
-    output = _required_workspace_path(query, "output", workspace)
-    badge = _optional_str(query, "badge")
+def _handle_report(environ: WSGIEnviron, params: Params, workspace: Path) -> Response:
+    # Writes report files: POST-only, same-origin JSON, workspace-confined.
+    body = _read_json_body(environ)
+    database = _resolve_in_workspace(workspace, _required_key(body, "database"))
+    output = _resolve_in_workspace(workspace, _required_key(body, "output"))
+    badge = body.get("badge")
     payload = service.generate_report(
         database,
         params["experiment_id"],
         output,
-        badge=badge,  # type: ignore[arg-type]
-        baseline=_optional_str(query, "baseline"),
+        badge=badge,
+        baseline=body.get("baseline"),
     )
     return Response.json(payload)
 
 
-def _handle_compare(query: Query, workspace: Path) -> Response:
-    database = _required_workspace_path(query, "database", workspace)
-    output = _required_workspace_path(query, "output", workspace)
+def _handle_compare(environ: WSGIEnviron, workspace: Path) -> Response:
+    # Writes a paired comparison report: POST-only, same-origin JSON,
+    # workspace-confined.
+    body = _read_json_body(environ)
+    database = _resolve_in_workspace(workspace, _required_key(body, "database"))
+    output = _resolve_in_workspace(workspace, _required_key(body, "output"))
     payload = service.generate_pair_report(
         database,
-        _required_str(query, "baseline"),
-        _required_str(query, "candidate"),
-        _required_str(query, "baseline_config"),
-        _required_str(query, "candidate_config"),
+        _required_key(body, "baseline"),
+        _required_key(body, "candidate"),
+        _required_key(body, "baseline_config"),
+        _required_key(body, "candidate_config"),
         output,
     )
     return Response.json(payload)
