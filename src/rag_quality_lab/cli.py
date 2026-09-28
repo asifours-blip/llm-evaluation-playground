@@ -208,6 +208,15 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="permit live (paid) runs started from the workbench; offline by default",
     )
+    serve.add_argument(
+        "--workspace",
+        type=Path,
+        default=Path.cwd(),
+        help=(
+            "root directory every request-supplied path must resolve inside "
+            "(default: the current working directory)"
+        ),
+    )
     serve.set_defaults(handler=_handle_serve)
     return parser
 
@@ -735,9 +744,15 @@ def _handle_pairwise(args: argparse.Namespace) -> int:
 def _handle_serve(args: argparse.Namespace) -> int:
     from rag_quality_lab.web import serve
 
-    server = serve(host=args.host, port=args.port, allow_live=args.allow_live)
+    server = serve(
+        host=args.host, port=args.port, allow_live=args.allow_live, workspace=args.workspace
+    )
     mode = "live runs allowed" if args.allow_live else "offline only"
-    print(f"rag-quality workbench on http://{args.host}:{args.port} ({mode}); Ctrl+C to stop")
+    workspace = Path(args.workspace).resolve()
+    print(
+        f"rag-quality workbench on http://{args.host}:{args.port} ({mode}); "
+        f"workspace={workspace}; Ctrl+C to stop"
+    )
     try:
         server.serve_forever()
     except KeyboardInterrupt:

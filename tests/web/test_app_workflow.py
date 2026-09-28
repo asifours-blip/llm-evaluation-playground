@@ -24,7 +24,7 @@ def _run_to_completion(app: object, token: str, *, timeout_seconds: float = 10.0
 
 def test_full_workbench_workflow(tmp_path: Path) -> None:
     config_path = write_mock_workbench_inputs(tmp_path)
-    app = create_app(allow_live=False)
+    app = create_app(allow_live=False, workspace=tmp_path)
 
     dataset_response = call(
         app, "GET", "/api/dataset", query=f"dataset={tmp_path / 'dataset.json'}"
@@ -110,7 +110,7 @@ def test_full_workbench_workflow(tmp_path: Path) -> None:
 
 def test_cancel_refuses_after_completion(tmp_path: Path) -> None:
     config_path = write_mock_workbench_inputs(tmp_path)
-    app = create_app(allow_live=False)
+    app = create_app(allow_live=False, workspace=tmp_path)
     start_response = call(
         app, "POST", "/api/experiments/start", json_body={"config": str(config_path)}
     )
@@ -145,7 +145,7 @@ def test_live_run_refused_without_allow_live(tmp_path: Path) -> None:
         "mode: mock", f"mode: live\npricing_path: {pricing_path}"
     )
     config_path.write_text(config_text, encoding="utf-8")
-    app = create_app(allow_live=False)
+    app = create_app(allow_live=False, workspace=tmp_path)
 
     response = call(
         app,

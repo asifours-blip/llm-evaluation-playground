@@ -53,7 +53,7 @@ def test_web_report_matches_cli_report(tmp_path: Path) -> None:
     assert cli_report.returncode == 0, cli_report.stderr
 
     web_output_dir = tmp_path / "web-report"
-    app = create_app(allow_live=False)
+    app = create_app(allow_live=False, workspace=tmp_path)
     web_report = call(
         app,
         "GET",
@@ -80,7 +80,7 @@ def test_started_experiment_report_matches_cli_regeneration(tmp_path: Path) -> N
 
     config_path = write_mock_workbench_inputs(tmp_path)
     database_path = tmp_path / "experiments.sqlite3"
-    app = create_app(allow_live=False)
+    app = create_app(allow_live=False, workspace=tmp_path)
 
     start_response = call(
         app, "POST", "/api/experiments/start", json_body={"config": str(config_path)}

@@ -30,8 +30,14 @@ def call(
     *,
     query: str = "",
     json_body: dict[str, Any] | None = None,
+    content_type: str | None = "application/json",
+    origin: str | None = None,
+    raw_body: bytes | None = None,
 ) -> WSGIResponse:
-    payload = json.dumps(json_body).encode("utf-8") if json_body is not None else b""
+    if raw_body is not None:
+        payload = raw_body
+    else:
+        payload = json.dumps(json_body).encode("utf-8") if json_body is not None else b""
     environ: dict[str, Any] = {
         "REQUEST_METHOD": method,
         "PATH_INFO": path,
@@ -39,6 +45,11 @@ def call(
         "CONTENT_LENGTH": str(len(payload)),
         "wsgi.input": io.BytesIO(payload),
     }
+    if content_type is not None:
+        environ["CONTENT_TYPE"] = content_type
+    if origin is not None:
+        environ["HTTP_ORIGIN"] = origin
+    environ.setdefault("HTTP_HOST", "127.0.0.1:8765")
     captured: dict[str, Any] = {}
 
     def start_response(status: str, headers: list[tuple[str, str]]) -> None:

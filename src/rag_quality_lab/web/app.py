@@ -10,6 +10,20 @@ duplicated here.
 Live experiment runs are refused unless the server was started with
 ``allow_live=True`` *and* the request explicitly confirms it, mirroring the
 CLI's ``--confirm-live-run`` gate.
+
+Two defenses keep a page open in the operator's own browser from using this
+server as a confused deputy (the server only binds loopback, but any local
+page -- including a malicious one -- can still reach it):
+
+- Every request-supplied path (dataset, config, database, output, ...) is
+  resolved and must stay inside the server's ``workspace`` directory
+  (``--workspace``, default the current working directory); anything else is
+  refused with 400 before it is ever opened.
+- Every POST (the only requests that start runs or write files) must carry
+  ``Content-Type: application/json`` -- which a cross-origin form or ``img``/
+  ``script`` tag cannot send without triggering a CORS preflight this server
+  does not answer -- and, if the browser also sends an ``Origin`` header, it
+  must name this server's own origin.
 """
 
 from __future__ import annotations
@@ -35,6 +49,18 @@ StartResponse: TypeAlias = "WSGIStartResponse"
 Params = dict[str, str]
 Query = dict[str, list[str]]
 Handler = Callable[[WSGIEnviron, Params, Query], "Response"]
+
+
+class PathEscapesWorkspace(ValueError):
+    """Raised when a request-supplied path would resolve outside the workspace."""
+
+
+class UnsupportedContentType(ValueError):
+    """Raised when a POST body's Content-Type is not application/json."""
+
+
+class OriginNotAllowed(PermissionError):
+    """Raised when a POST request's Origin header names a different server."""
 
 
 class Response:
@@ -92,25 +118,52 @@ route("GET", r"/api/artifacts/download", "download")
 WSGIApp = Callable[[WSGIEnviron, StartResponse], Iterable[bytes]]
 
 
-def create_app(*, allow_live: bool = False) -> WSGIApp:
-    """Build the WSGI application. ``allow_live=False`` (the default) refuses
-    every live run regardless of what a request asks for."""
+def create_app(*, allow_live: bool = False, workspace: Path | str | None = None) -> WSGIApp:
+    """Build the WSGI application.
 
+    ``allow_live=False`` (the default) refuses every live run regardless of
+    what a request asks for. ``workspace`` (default: the current working
+    directory) is the root every request-supplied path must resolve inside;
+    a request naming a path outside it is refused with 400 before it is
+    opened.
+    """
+
+    resolved_workspace = Path(workspace).resolve() if workspace is not None else Path.cwd()
     manager = service.RunManager(allow_live=allow_live)
     handlers: dict[str, Handler] = {
-        "index": _handle_index,
-        "dataset": _handle_dataset,
-        "config": _handle_config,
-        "precheck": _handle_precheck,
-        "list_experiments": _handle_list_experiments,
-        "experiment_detail": _handle_experiment_detail,
-        "case_results": _handle_case_results,
-        "report": _handle_report,
-        "compare": _handle_compare,
-        "download": _handle_download,
-        "start": lambda environ, params, query: _handle_start(environ, manager),
-        "resume": lambda environ, params, query: _handle_resume(environ, params, manager),
-        "cancel": lambda environ, params, query: _handle_cancel(environ, manager),
+        "index": lambda environ, params, query: _handle_index(),
+        "dataset": lambda environ, params, query: _handle_dataset(query, resolved_workspace),
+        "config": lambda environ, params, query: _handle_config(query, resolved_workspace),
+        "precheck": lambda environ, params, query: _handle_precheck(query, resolved_workspace),
+        "list_experiments": (
+            lambda environ, params, query: _handle_list_experiments(query, resolved_workspace)
+        ),
+        "experiment_detail": (
+            lambda environ, params, query: _handle_experiment_detail(
+                params, query, resolved_workspace
+            )
+        ),
+        "case_results": (
+            lambda environ, params, query: _handle_case_results(
+                params, query, resolved_workspace
+            )
+        ),
+        "report": (
+            lambda environ, params, query: _handle_report(params, query, resolved_workspace)
+        ),
+        "compare": lambda environ, params, query: _handle_compare(query, resolved_workspace),
+        "download": lambda environ, params, query: _handle_download(query, resolved_workspace),
+        "start": (
+            lambda environ, params, query: _handle_start(environ, manager, resolved_workspace)
+        ),
+        "resume": (
+            lambda environ, params, query: _handle_resume(
+                environ, params, manager, resolved_workspace
+            )
+        ),
+        "cancel": (
+            lambda environ, params, query: _handle_cancel(environ, manager, resolved_workspace)
+        ),
         "run_status": lambda environ, params, query: _handle_run_status(params, manager),
     }
 
@@ -139,58 +192,87 @@ def _dispatch(
         if match is None:
             continue
         try:
+            if method == "POST":
+                _check_post_safety(environ)
             return handlers[name](environ, match.groupdict(), query)
+        except UnsupportedContentType as error:
+            return Response.error("415 Unsupported Media Type", str(error))
+        except OriginNotAllowed as error:
+            return Response.error("403 Forbidden", str(error))
+        except service.LiveRunNotAllowed as error:
+            return Response.error("403 Forbidden", str(error))
+        except PathEscapesWorkspace as error:
+            return Response.error("400 Bad Request", str(error))
+        except service.PathEscapesArtifactDir as error:
+            return Response.error("400 Bad Request", str(error))
         except KeyError as error:
             return Response.error("404 Not Found", str(error))
         except FileNotFoundError as error:
             return Response.error("404 Not Found", str(error))
-        except service.PathEscapesArtifactDir as error:
-            return Response.error("400 Bad Request", str(error))
-        except service.LiveRunNotAllowed as error:
-            return Response.error("403 Forbidden", str(error))
         except (ValueError, PermissionError) as error:
             return Response.error("400 Bad Request", str(error))
     return Response.error("404 Not Found", f"no route for {method} {path}")
 
 
-def _handle_index(environ: WSGIEnviron, params: Params, query: Query) -> Response:
+def _check_post_safety(environ: WSGIEnviron) -> None:
+    """Reject cross-site POSTs: browsers cannot send JSON-typed, same-origin
+    POSTs without cooperation from this server (no CORS headers are ever
+    sent), so requiring both is enough to refuse a page on another origin."""
+
+    content_type = environ.get("CONTENT_TYPE", "")
+    media_type = content_type.split(";", 1)[0].strip().lower()
+    if media_type != "application/json":
+        raise UnsupportedContentType(
+            "POST requests require Content-Type: application/json, got: "
+            + (content_type or "(none)")
+        )
+    origin = environ.get("HTTP_ORIGIN")
+    if origin is not None and origin not in _allowed_origins(environ):
+        raise OriginNotAllowed(f"Origin not allowed: {origin}")
+
+
+def _allowed_origins(environ: WSGIEnviron) -> set[str]:
+    host_header = environ.get("HTTP_HOST", "")
+    if ":" in host_header:
+        port = host_header.rsplit(":", 1)[1]
+    else:
+        port = str(environ.get("SERVER_PORT") or "80")
+    return {f"http://127.0.0.1:{port}", f"http://localhost:{port}"}
+
+
+def _handle_index() -> Response:
     return Response.file(STATIC_DIR / "index.html")
 
 
-def _handle_dataset(environ: WSGIEnviron, params: Params, query: Query) -> Response:
-    return Response.json(service.dataset_view(_required_path(query, "dataset")))
+def _handle_dataset(query: Query, workspace: Path) -> Response:
+    dataset_path = _required_workspace_path(query, "dataset", workspace)
+    return Response.json(service.dataset_view(dataset_path))
 
 
-def _handle_config(environ: WSGIEnviron, params: Params, query: Query) -> Response:
-    return Response.json(service.config_view(_required_path(query, "config")))
+def _handle_config(query: Query, workspace: Path) -> Response:
+    config_path = _required_workspace_path(query, "config", workspace)
+    return Response.json(service.config_view(config_path))
 
 
-def _handle_precheck(environ: WSGIEnviron, params: Params, query: Query) -> Response:
-    return Response.json(service.precheck(_required_path(query, "config")))
+def _handle_precheck(query: Query, workspace: Path) -> Response:
+    return Response.json(service.precheck(_required_workspace_path(query, "config", workspace)))
 
 
-def _handle_list_experiments(
-    environ: WSGIEnviron, params: Params, query: Query
-) -> Response:
-    return Response.json(
-        {"experiments": service.list_experiments(_required_path(query, "database"))}
-    )
+def _handle_list_experiments(query: Query, workspace: Path) -> Response:
+    database = _required_workspace_path(query, "database", workspace)
+    return Response.json({"experiments": service.list_experiments(database)})
 
 
-def _handle_experiment_detail(
-    environ: WSGIEnviron, params: Params, query: Query
-) -> Response:
-    detail = service.experiment_detail(
-        _required_path(query, "database"), params["experiment_id"]
-    )
+def _handle_experiment_detail(params: Params, query: Query, workspace: Path) -> Response:
+    database = _required_workspace_path(query, "database", workspace)
+    detail = service.experiment_detail(database, params["experiment_id"])
     return Response.json(detail)
 
 
-def _handle_case_results(
-    environ: WSGIEnviron, params: Params, query: Query
-) -> Response:
+def _handle_case_results(params: Params, query: Query, workspace: Path) -> Response:
+    database = _required_workspace_path(query, "database", workspace)
     page = service.case_results(
-        _required_path(query, "database"),
+        database,
         params["experiment_id"],
         config_id=_optional_str(query, "config_id"),
         status=_optional_str(query, "status"),
@@ -200,51 +282,57 @@ def _handle_case_results(
     return Response.json(page)
 
 
-def _handle_report(environ: WSGIEnviron, params: Params, query: Query) -> Response:
+def _handle_report(params: Params, query: Query, workspace: Path) -> Response:
+    database = _required_workspace_path(query, "database", workspace)
+    output = _required_workspace_path(query, "output", workspace)
     badge = _optional_str(query, "badge")
     payload = service.generate_report(
-        _required_path(query, "database"),
+        database,
         params["experiment_id"],
-        _required_path(query, "output"),
+        output,
         badge=badge,  # type: ignore[arg-type]
         baseline=_optional_str(query, "baseline"),
     )
     return Response.json(payload)
 
 
-def _handle_compare(environ: WSGIEnviron, params: Params, query: Query) -> Response:
+def _handle_compare(query: Query, workspace: Path) -> Response:
+    database = _required_workspace_path(query, "database", workspace)
+    output = _required_workspace_path(query, "output", workspace)
     payload = service.generate_pair_report(
-        _required_path(query, "database"),
+        database,
         _required_str(query, "baseline"),
         _required_str(query, "candidate"),
         _required_str(query, "baseline_config"),
         _required_str(query, "candidate_config"),
-        _required_path(query, "output"),
+        output,
     )
     return Response.json(payload)
 
 
-def _handle_download(environ: WSGIEnviron, params: Params, query: Query) -> Response:
-    output_dir = _required_path(query, "output")
+def _handle_download(query: Query, workspace: Path) -> Response:
+    output_dir = _required_workspace_path(query, "output", workspace)
     file_path = service.artifact_download_path(output_dir, _required_str(query, "file"))
     return Response.file(file_path)
 
 
-def _handle_start(environ: WSGIEnviron, manager: service.RunManager) -> Response:
+def _handle_start(environ: WSGIEnviron, manager: service.RunManager, workspace: Path) -> Response:
     body = _read_json_body(environ)
+    config_path = _resolve_in_workspace(workspace, _required_key(body, "config"))
     token = manager.start_run(
-        Path(_required_key(body, "config")),
+        config_path,
         confirm_live_run=bool(body.get("confirm_live_run", False)),
     )
     return Response.json({"token": token})
 
 
 def _handle_resume(
-    environ: WSGIEnviron, params: dict[str, str], manager: service.RunManager
+    environ: WSGIEnviron, params: Params, manager: service.RunManager, workspace: Path
 ) -> Response:
     body = _read_json_body(environ)
+    config_path = _resolve_in_workspace(workspace, _required_key(body, "config"))
     token = manager.resume_run(
-        Path(_required_key(body, "config")),
+        config_path,
         params["experiment_id"],
         confirm_live_run=bool(body.get("confirm_live_run", False)),
         retry_unknown=bool(body.get("retry_unknown", False)),
@@ -252,13 +340,14 @@ def _handle_resume(
     return Response.json({"token": token})
 
 
-def _handle_cancel(environ: WSGIEnviron, manager: service.RunManager) -> Response:
+def _handle_cancel(environ: WSGIEnviron, manager: service.RunManager, workspace: Path) -> Response:
     body = _read_json_body(environ)
-    payload = service.request_cancel(Path(_required_key(body, "database")), body["experiment_id"])
+    database_path = _resolve_in_workspace(workspace, _required_key(body, "database"))
+    payload = service.request_cancel(database_path, body["experiment_id"])
     return Response.json(payload)
 
 
-def _handle_run_status(params: dict[str, str], manager: service.RunManager) -> Response:
+def _handle_run_status(params: Params, manager: service.RunManager) -> Response:
     try:
         state = manager.get(params["token"])
     except KeyError:
@@ -273,8 +362,18 @@ def _handle_run_status(params: dict[str, str], manager: service.RunManager) -> R
     )
 
 
-def _required_path(query: Query, key: str) -> Path:
-    return Path(_required_str(query, key))
+def _resolve_in_workspace(workspace: Path, raw: str) -> Path:
+    """Resolve ``raw`` against ``workspace`` and refuse it if it escapes."""
+
+    raw_path = Path(raw)
+    candidate = (workspace / raw_path if not raw_path.is_absolute() else raw_path).resolve()
+    if candidate != workspace and workspace not in candidate.parents:
+        raise PathEscapesWorkspace(f"path escapes workspace {workspace}: {raw}")
+    return candidate
+
+
+def _required_workspace_path(query: Query, key: str, workspace: Path) -> Path:
+    return _resolve_in_workspace(workspace, _required_str(query, key))
 
 
 def _required_str(query: Query, key: str) -> str:
@@ -304,9 +403,11 @@ def _read_json_body(environ: WSGIEnviron) -> dict[str, Any]:
     return payload
 
 
-def serve(*, host: str, port: int, allow_live: bool = False) -> WSGIServer:
+def serve(
+    *, host: str, port: int, allow_live: bool = False, workspace: Path | str | None = None
+) -> WSGIServer:
     """Start a real HTTP server. Caller owns the returned server's lifecycle:
     run ``server.serve_forever()`` and always pair it with ``server.shutdown()``
     plus ``server_close()`` (a ``with`` block, or a ``try/finally``)."""
 
-    return make_server(host, port, create_app(allow_live=allow_live))
+    return make_server(host, port, create_app(allow_live=allow_live, workspace=workspace))
