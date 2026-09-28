@@ -96,6 +96,11 @@
   </details>
   {% endfor %}
 
+  <h2>Limitations</h2>
+  <ul>
+  {% for item in report.limitations %}<li>{{ item }}</li>{% endfor %}
+  </ul>
+
   <h2>Configuration</h2>
   <pre>{{ report.identity.config|tojson(indent=2) }}</pre>
   {% if report.baseline_comparison %}<h2>Baseline deltas</h2><pre>{{ report.baseline_comparison|tojson(indent=2) }}</pre>{% endif %}

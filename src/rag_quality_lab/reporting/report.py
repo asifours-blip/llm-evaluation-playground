@@ -33,6 +33,28 @@ ReportBadge = Literal["mock", "pilot", "final"]
 ANSWERABLE_ONLY_PREFIXES = ("retrieval_", "answer_", "over_abstention")
 UNANSWERABLE_ONLY_METRICS = frozenset({"false_answer"})
 
+# Standing caveats from the frozen v1.1 dataset review (docs/dataset-v1.1-review.md)
+# and the archived strict-judge evidence run (docs/artifacts/final-evidence-summary-*.json).
+# These carry forward into every report so a reader never mistakes a small offline
+# or pilot run for a large, pristine, human-graded evaluation. Do not remove or
+# soften any bullet without re-checking the archived artifacts it summarizes.
+KNOWN_LIMITATIONS: tuple[str, ...] = (
+    "Sample size is small: the frozen dataset has 48 cases total (32 dev, 16 "
+    "frozen holdout); point estimates and their splits by category or label "
+    "carry wide uncertainty.",
+    "The most recent live strict-judge evidence run recorded a judge pass rate "
+    "of roughly 61.5% (judge_pass_rate ~0.6146) and a false-answer rate of "
+    "roughly 54.2%; treat those figures, not this run's numbers alone, as the "
+    "reference point for how strict the judge is.",
+    "The v1.1 holdout was frozen for reproducible scoring going forward, but it "
+    "was not held out from every prior run of this project: cases now in the "
+    "holdout split were evaluated before the freeze. Do not describe it as "
+    "never having been seen.",
+    "The dataset review in docs/dataset-v1.1-review.md was performed by an AI "
+    "model at the repository owner's request, not by an independent human "
+    "annotator.",
+)
+
 
 @dataclass(frozen=True)
 class ReportPaths:
@@ -157,6 +179,7 @@ def _report_payload(
         "dataset_labels": _dataset_labels(results),
         "failures": failures,
         "case_results": [result.model_dump(mode="json") for result in results],
+        "limitations": list(KNOWN_LIMITATIONS),
         "baseline_comparison": (
             comparison.model_dump(mode="json") if comparison is not None else None
         ),
