@@ -319,12 +319,17 @@ class RunManager:
             state.status = "completed"
             state.summary = record.summary
 
+        # Mark running before the worker starts: a fast run can finish while
+        # the new experiment ID is being awaited, and its final status must
+        # not be overwritten afterwards.
+        state.status = "running"
         thread = threading.Thread(target=target, daemon=True)
         thread.start()
-        state.experiment_id = _await_new_experiment_id(
+        discovered_id = _await_new_experiment_id(
             config.database_path, existing_ids, timeout_seconds=5.0
         )
-        state.status = "running"
+        if state.experiment_id is None:
+            state.experiment_id = discovered_id
         return token
 
     def resume_run(
