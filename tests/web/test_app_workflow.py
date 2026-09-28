@@ -4,20 +4,23 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
+from typing import Any, cast
 
-from rag_quality_lab.web.app import create_app
+from rag_quality_lab.web.app import WSGIApp, create_app
 from tests.web.conftest import write_mock_workbench_inputs
 from tests.web.wsgi_client import call
 
 
-def _run_to_completion(app: object, token: str, *, timeout_seconds: float = 10.0) -> dict:
+def _run_to_completion(
+    app: WSGIApp, token: str, *, timeout_seconds: float = 10.0
+) -> dict[str, Any]:
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
-        response = call(app, "GET", f"/api/runs/{token}")  # type: ignore[arg-type]
+        response = call(app, "GET", f"/api/runs/{token}")
         assert response.status_code == 200
         body = response.json()
         if body["status"] in {"completed", "failed"}:
-            return body
+            return cast(dict[str, Any], body)
         time.sleep(0.02)
     raise AssertionError(f"run {token} did not finish within {timeout_seconds}s")
 

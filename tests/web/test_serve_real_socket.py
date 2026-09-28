@@ -18,6 +18,7 @@ def test_serve_answers_and_shuts_down_cleanly() -> None:
     thread.start()
     try:
         host, port = server.server_address[0], server.server_address[1]
+        assert isinstance(host, str)
         with urllib.request.urlopen(f"http://{host}:{port}/", timeout=5) as response:
             assert response.status == 200
             assert b"RAG Quality Lab" in response.read()

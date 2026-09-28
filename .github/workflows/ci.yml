@@ -39,6 +39,7 @@ jobs:
           src/rag_quality_lab/reporting
           src/rag_quality_lab/web
           src/rag_quality_lab/cli.py
+          tests
 
       - name: Test deterministic modules with focused coverage
         run: >-

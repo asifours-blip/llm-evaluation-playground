@@ -5,6 +5,7 @@ import subprocess
 import sys
 from datetime import date
 from pathlib import Path
+from typing import Any
 
 import yaml
 
@@ -63,7 +64,7 @@ def write_cli_fixture(
         encoding="utf-8",
     )
     config = tmp_path / f"{mode}.yaml"
-    payload = {
+    payload: dict[str, Any] = {
         "name": f"cli-{mode}",
         "mode": mode,
         "dataset_path": str(dataset),
@@ -160,7 +161,7 @@ def test_live_preflight_plans_remote_embeddings_and_requires_their_price(
     assert "Traceback" not in missing.stderr
 
     pricing_path = tmp_path / "pricing.yaml"
-    pricing = yaml.safe_load(pricing_path.read_text(encoding="utf-8"))
+    pricing: dict[str, Any] = yaml.safe_load(pricing_path.read_text(encoding="utf-8"))
     pricing["models"]["remote-embedding"] = {"input_cache_miss": 1, "output": 0}
     pricing_path.write_text(yaml.safe_dump(pricing), encoding="utf-8")
 

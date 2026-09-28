@@ -2,6 +2,7 @@ from datetime import date, timedelta
 from decimal import Decimal
 
 import pytest
+from pydantic import AnyHttpUrl
 
 from rag_quality_lab.config.loaders import load_yaml_model
 from rag_quality_lab.domain.models import (
@@ -27,12 +28,12 @@ def pricing(
         provider="test",
         currency="CNY",
         verified_at=verified_at or date.today(),
-        source_url="https://example.com/pricing",
+        source_url=AnyHttpUrl("https://example.com/pricing"),
         models={
             "pro": ModelPrice(
-                input_cache_hit=1,
-                input_cache_miss=input_rate,
-                output=output_rate,
+                input_cache_hit=Decimal("1"),
+                input_cache_miss=Decimal(input_rate),
+                output=Decimal(output_rate),
             )
         },
     )
@@ -66,7 +67,7 @@ def test_preflight_blocks_stale_pricing() -> None:
     decision = preflight_budget(
         planned=[PlannedCall(model="pro", input_token_cap=1, output_token_cap=1)],
         pricing=pricing(verified_at=date.today() - timedelta(days=8)),
-        budget=BudgetConfig(hard_limit=20),
+        budget=BudgetConfig(hard_limit=Decimal("20")),
         on_date=date.today(),
     )
 
@@ -192,7 +193,7 @@ def test_ledger_records_and_raises_when_actual_usage_exceeds_cap() -> None:
 def test_budget_rejects_currency_mismatch_and_unknown_model() -> None:
     with pytest.raises(ValueError, match="currency"):
         BudgetLedger(
-            budget=BudgetConfig(currency="USD", hard_limit=20),
+            budget=BudgetConfig(currency="USD", hard_limit=Decimal("20")),
             pricing=pricing(),
         )
 
@@ -202,7 +203,7 @@ def test_budget_rejects_currency_mismatch_and_unknown_model() -> None:
                 PlannedCall(model="unknown", input_token_cap=1, output_token_cap=1)
             ],
             pricing=pricing(),
-            budget=BudgetConfig(hard_limit=20),
+            budget=BudgetConfig(hard_limit=Decimal("20")),
         )
 
 
@@ -234,7 +235,7 @@ def test_official_peak_pricing_matches_full_plan_estimate() -> None:
     decision = preflight_budget(
         planned=planned,
         pricing=official,
-        budget=BudgetConfig(hard_limit=20),
+        budget=BudgetConfig(hard_limit=Decimal("20")),
         on_date=date(2026, 8, 21),
     )
 

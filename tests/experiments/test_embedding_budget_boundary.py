@@ -14,6 +14,7 @@ from typing import Any
 
 import pytest
 import yaml
+from pydantic import AnyHttpUrl
 
 from rag_quality_lab.domain.models import (
     BudgetConfig,
@@ -189,7 +190,7 @@ def live_config(
         max_workers=1,
         provider=ProviderConfig(
             name="local-test",
-            base_url="https://provider.test/v1",
+            base_url=AnyHttpUrl("https://provider.test/v1"),
             api_key_env=API_KEY_ENV,
             chat_model=CHAT_MODEL,
             embedding_model=embedding_model,
@@ -201,7 +202,7 @@ def live_config(
                 chunk_size=200, chunk_overlap=20, top_k=1, prompt_variant="direct"
             )
         ],
-        budget=BudgetConfig(hard_limit=20),
+        budget=BudgetConfig(hard_limit=Decimal("20")),
         pricing_path=pricing_path,
     )
 

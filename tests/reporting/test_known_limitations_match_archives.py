@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import cast
 
 from rag_quality_lab.reporting.report import KNOWN_LIMITATIONS
 
@@ -25,7 +26,7 @@ HTTP_INSTRUMENTED_EVIDENCE = (
 
 
 def _quality(path: Path) -> dict[str, float]:
-    return json.loads(path.read_text(encoding="utf-8"))["quality"]
+    return cast(dict[str, float], json.loads(path.read_text(encoding="utf-8"))["quality"])
 
 
 def _limitations_text() -> str:

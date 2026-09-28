@@ -12,13 +12,14 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any, cast
 
 from tests.web.conftest import write_mock_workbench_inputs
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "backup_restore.py"
 
 
-def _run(*args: str) -> dict:
+def _run(*args: str) -> dict[str, Any]:
     result = subprocess.run(
         [sys.executable, str(SCRIPT), *args],
         check=False,
@@ -26,10 +27,10 @@ def _run(*args: str) -> dict:
         text=True,
     )
     assert result.returncode == 0, result.stderr
-    return json.loads(result.stdout)
+    return cast(dict[str, Any], json.loads(result.stdout))
 
 
-def _run_cli(*args: str) -> dict:
+def _run_cli(*args: str) -> dict[str, Any]:
     result = subprocess.run(
         [sys.executable, "-m", "rag_quality_lab.cli", *args],
         check=False,
@@ -37,7 +38,7 @@ def _run_cli(*args: str) -> dict:
         text=True,
     )
     assert result.returncode == 0, result.stderr
-    return json.loads(result.stdout)
+    return cast(dict[str, Any], json.loads(result.stdout))
 
 
 def test_backup_then_restore_regenerates_identical_report(tmp_path: Path) -> None:

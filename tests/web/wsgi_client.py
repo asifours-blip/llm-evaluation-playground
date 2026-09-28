@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import io
 import json
+from collections.abc import Callable
 from dataclasses import dataclass
+from types import TracebackType
 from typing import Any
 
 from rag_quality_lab.web.app import WSGIApp
@@ -52,9 +54,16 @@ def call(
     environ.setdefault("HTTP_HOST", "127.0.0.1:8765")
     captured: dict[str, Any] = {}
 
-    def start_response(status: str, headers: list[tuple[str, str]]) -> None:
+    def start_response(
+        status: str,
+        headers: list[tuple[str, str]],
+        exc_info: tuple[type[BaseException], BaseException, TracebackType]
+        | tuple[None, None, None]
+        | None = None,
+    ) -> Callable[[bytes], object]:
         captured["status"] = status
         captured["headers"] = headers
+        return lambda data: None
 
     body = b"".join(app(environ, start_response))
     return WSGIResponse(status=captured["status"], body=body)

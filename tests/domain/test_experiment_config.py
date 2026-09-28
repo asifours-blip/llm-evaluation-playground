@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 import yaml
-from pydantic import ValidationError
+from pydantic import AnyHttpUrl, ValidationError
 
 from rag_quality_lab.config.loaders import load_experiment_config, load_yaml_model
 from rag_quality_lab.domain.models import (
@@ -20,7 +20,7 @@ from rag_quality_lab.domain.models import (
 def provider_config() -> ProviderConfig:
     return ProviderConfig(
         name="fake",
-        base_url="https://example.com/v1",
+        base_url=AnyHttpUrl("https://example.com/v1"),
         api_key_env="FAKE_API_KEY",
         chat_model="fake-chat",
         embedding_model="fake-embedding",
@@ -38,7 +38,7 @@ def retrieval_config() -> RetrievalConfig:
 
 def test_budget_requires_positive_hard_limit() -> None:
     with pytest.raises(ValidationError):
-        BudgetConfig(currency="CNY", hard_limit=0)
+        BudgetConfig.model_validate({"currency": "CNY", "hard_limit": 0})
 
 
 def test_pricing_reports_staleness() -> None:
@@ -46,8 +46,8 @@ def test_pricing_reports_staleness() -> None:
         provider="deepseek",
         currency="CNY",
         verified_at=date.today() - timedelta(days=8),
-        source_url="https://example.com/pricing",
-        models={"flash": ModelPrice(input_cache_miss=1, output=2)},
+        source_url=AnyHttpUrl("https://example.com/pricing"),
+        models={"flash": ModelPrice(input_cache_miss=Decimal("1"), output=Decimal("2"))},
     )
 
     assert pricing.is_stale(date.today(), max_age_days=7)
@@ -74,7 +74,7 @@ def test_experiment_rejects_duplicate_retrieval_configurations() -> None:
             artifact_dir=Path("artifacts"),
             provider=provider_config(),
             retrieval=[retrieval, retrieval],
-            budget=BudgetConfig(hard_limit=20),
+            budget=BudgetConfig(hard_limit=Decimal("20")),
         )
 
 
@@ -88,7 +88,7 @@ def test_live_experiment_requires_pricing_path() -> None:
             artifact_dir=Path("artifacts"),
             provider=provider_config(),
             retrieval=[retrieval_config()],
-            budget=BudgetConfig(hard_limit=20),
+            budget=BudgetConfig(hard_limit=Decimal("20")),
         )
 
 

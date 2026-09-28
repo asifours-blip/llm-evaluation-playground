@@ -1,8 +1,11 @@
 from collections.abc import Sequence
 from datetime import date
+from decimal import Decimal
 from pathlib import Path
+from typing import Literal
 
 import yaml
+from pydantic import AnyHttpUrl
 
 from rag_quality_lab.domain.models import (
     BudgetConfig,
@@ -182,7 +185,9 @@ def write_corpus(path: Path) -> None:
     )
 
 
-def experiment_config(tmp_path: Path, *, mode: str = "mock") -> ExperimentConfig:
+def experiment_config(
+    tmp_path: Path, *, mode: Literal["mock", "live"] = "mock"
+) -> ExperimentConfig:
     corpus_path = tmp_path / "knowledge_base"
     write_corpus(corpus_path)
     return ExperimentConfig(
@@ -195,7 +200,7 @@ def experiment_config(tmp_path: Path, *, mode: str = "mock") -> ExperimentConfig
         max_workers=1,
         provider=ProviderConfig(
             name="fake",
-            base_url="https://example.com/v1",
+            base_url=AnyHttpUrl("https://example.com/v1"),
             api_key_env="FAKE_API_KEY",
             chat_model="fake-model",
             embedding_model="fake-hash-32",
@@ -208,7 +213,7 @@ def experiment_config(tmp_path: Path, *, mode: str = "mock") -> ExperimentConfig
                 prompt_variant="direct",
             )
         ],
-        budget=BudgetConfig(hard_limit=20),
+        budget=BudgetConfig(hard_limit=Decimal("20")),
     )
 
 
@@ -314,7 +319,7 @@ def test_runner_preflight_budget_exceeded_schedules_no_paid_cases(
     config = config.model_copy(
         update={
             "mode": "live",
-            "budget": BudgetConfig(hard_limit=30),
+            "budget": BudgetConfig(hard_limit=Decimal("30")),
             "pricing_path": pricing_path,
         }
     )
