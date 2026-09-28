@@ -42,10 +42,12 @@ KNOWN_LIMITATIONS: tuple[str, ...] = (
     "Sample size is small: the frozen dataset has 48 cases total (32 dev, 16 "
     "frozen holdout); point estimates and their splits by category or label "
     "carry wide uncertainty.",
-    "The most recent live strict-judge evidence run recorded a judge pass rate "
-    "of roughly 61.5% (judge_pass_rate ~0.6146) and a false-answer rate of "
-    "roughly 54.2%; treat those figures, not this run's numbers alone, as the "
-    "reference point for how strict the judge is.",
+    "Archived live runs: the 384-arm live final "
+    "(docs/artifacts/live-384-2026-08-21) recorded judge_pass_rate ~0.555 and "
+    "false_answer_rate ~0.615; the HTTP-instrumented run "
+    "(docs/artifacts/http-instrumented-2026-08-21) recorded judge_pass_rate "
+    "~0.635 and false_answer_rate ~0.542. Treat those archived figures, not this "
+    "run's numbers alone, as the reference point for how strict the judge is.",
     "The v1.1 holdout was frozen for reproducible scoring going forward, but it "
     "was not held out from every prior run of this project: cases now in the "
     "holdout split were evaluated before the freeze. Do not describe it as "
