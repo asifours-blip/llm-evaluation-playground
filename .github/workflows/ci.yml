@@ -37,6 +37,7 @@ jobs:
           src/rag_quality_lab/providers
           src/rag_quality_lab/experiments
           src/rag_quality_lab/reporting
+          src/rag_quality_lab/task_eval
           src/rag_quality_lab/web
           src/rag_quality_lab/cli.py
           tests
@@ -49,6 +50,7 @@ jobs:
           --cov=rag_quality_lab.metrics
           --cov=rag_quality_lab.experiments.budget
           --cov=rag_quality_lab.experiments.compare
+          --cov=rag_quality_lab.task_eval
           --cov-report=term-missing
           --cov-fail-under=90
 

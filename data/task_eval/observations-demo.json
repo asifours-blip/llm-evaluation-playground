@@ -1,0 +1,180 @@
+{
+  "schema_version": "task-observations/v1",
+  "suite_id": "agent-task-demo",
+  "suite_version": "1.0.0",
+  "suite_hash": "ca22b7c69591adb4601cbe9d2fe8ef90e39f0b7c8bef3ebc17e33c8187540ed8",
+  "run_id": "synthetic-demo-v1",
+  "producer_name": "checked-in-demo",
+  "producer_version": "1.0.0",
+  "tasks": [
+    {
+      "task_id": "shipping_eta",
+      "retrieved_evidence_ids": [
+        "K01"
+      ],
+      "artifact": {
+        "action": "answer_shipping",
+        "message_code": "物流信息已回复"
+      },
+      "citation_ids": [
+        "K01"
+      ],
+      "final_state": {
+        "status": "answered"
+      }
+    },
+    {
+      "task_id": "order_lookup",
+      "retrieved_evidence_ids": [
+        "K02"
+      ],
+      "artifact": {
+        "action": "answer_order",
+        "message_code": "订单状态已回复"
+      },
+      "citation_ids": [
+        "K02"
+      ],
+      "final_state": {
+        "status": "answered"
+      }
+    },
+    {
+      "task_id": "refund_eligible",
+      "retrieved_evidence_ids": [
+        "K03"
+      ],
+      "artifact": {
+        "action": "request_refund",
+        "message_code": "退款申请已创建"
+      },
+      "citation_ids": [
+        "K03"
+      ],
+      "final_state": {
+        "status": "requested"
+      }
+    },
+    {
+      "task_id": "refund_duplicate",
+      "retrieved_evidence_ids": [
+        "K04"
+      ],
+      "artifact": {
+        "action": "reuse_refund",
+        "message_code": "返回已有申请"
+      },
+      "citation_ids": [
+        "K04"
+      ],
+      "final_state": {
+        "status": "existing"
+      }
+    },
+    {
+      "task_id": "refund_outside_window",
+      "retrieved_evidence_ids": [],
+      "artifact": {
+        "action": "deny_refund",
+        "message_code": "超期退款拒绝"
+      },
+      "citation_ids": [],
+      "final_state": {
+        "status": "none"
+      }
+    },
+    {
+      "task_id": "address_change",
+      "retrieved_evidence_ids": [
+        "K06"
+      ],
+      "artifact": {
+        "action": "change_address",
+        "message_code": "发货后不可改址"
+      },
+      "citation_ids": [
+        "K06"
+      ],
+      "final_state": {
+        "status": "none"
+      }
+    },
+    {
+      "task_id": "price_conflict",
+      "retrieved_evidence_ids": [
+        "K07",
+        "C07"
+      ],
+      "artifact": {
+        "action": "answer_old_price",
+        "message_code": "按当前价格回复"
+      },
+      "citation_ids": [
+        "C07"
+      ],
+      "final_state": {
+        "status": "answered"
+      }
+    },
+    {
+      "task_id": "missing_order",
+      "retrieved_evidence_ids": [
+        "K08"
+      ],
+      "artifact": {
+        "action": "ask_order_id"
+      },
+      "citation_ids": [
+        "K08"
+      ],
+      "final_state": {
+        "status": "none"
+      }
+    },
+    {
+      "task_id": "ticket_created",
+      "retrieved_evidence_ids": [
+        "K09"
+      ],
+      "artifact": {
+        "action": "create_ticket",
+        "message_code": "工单已创建"
+      },
+      "citation_ids": [
+        "K09"
+      ],
+      "final_state": {
+        "status": "none"
+      }
+    },
+    {
+      "task_id": "citation_scope",
+      "retrieved_evidence_ids": [
+        "K10"
+      ],
+      "artifact": {
+        "action": "answer_policy",
+        "message_code": "仅引用本任务规则"
+      },
+      "citation_ids": [
+        "X10"
+      ],
+      "final_state": {
+        "status": "answered"
+      }
+    },
+    {
+      "task_id": "studio_rejected",
+      "retrieved_evidence_ids": [
+        "K12"
+      ],
+      "artifact": {
+        "action": "reject_publish",
+        "message_code": "发布已阻止"
+      },
+      "citation_ids": [
+        "K12"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,344 @@
+{
+  "schema_version": "task-eval/v1",
+  "suite_id": "agent-task-demo",
+  "suite_version": "1.0.0",
+  "source_kind": "synthetic_demo",
+  "tasks": [
+    {
+      "task_id": "shipping_eta",
+      "scenario": "客服查询物流时效",
+      "evidence": [
+        {
+          "evidence_id": "K01",
+          "source_version": "policy-2026-09",
+          "role": "authoritative"
+        },
+        {
+          "evidence_id": "C01",
+          "source_version": "stale-2026-08",
+          "role": "conflicting"
+        }
+      ],
+      "expected": {
+        "artifact": {
+          "action": "answer_shipping",
+          "message_code": "物流信息已回复"
+        },
+        "citation_ids": [
+          "K01"
+        ],
+        "final_state": {
+          "status": "answered"
+        }
+      }
+    },
+    {
+      "task_id": "order_lookup",
+      "scenario": "客服核对订单状态",
+      "evidence": [
+        {
+          "evidence_id": "K02",
+          "source_version": "policy-2026-09",
+          "role": "authoritative"
+        },
+        {
+          "evidence_id": "C02",
+          "source_version": "stale-2026-08",
+          "role": "conflicting"
+        }
+      ],
+      "expected": {
+        "artifact": {
+          "action": "answer_order",
+          "message_code": "订单状态已回复"
+        },
+        "citation_ids": [
+          "K02"
+        ],
+        "final_state": {
+          "status": "answered"
+        }
+      }
+    },
+    {
+      "task_id": "refund_eligible",
+      "scenario": "符合规则的退款申请",
+      "evidence": [
+        {
+          "evidence_id": "K03",
+          "source_version": "policy-2026-09",
+          "role": "authoritative"
+        },
+        {
+          "evidence_id": "C03",
+          "source_version": "stale-2026-08",
+          "role": "conflicting"
+        }
+      ],
+      "expected": {
+        "artifact": {
+          "action": "request_refund",
+          "message_code": "退款申请已创建"
+        },
+        "citation_ids": [
+          "K03"
+        ],
+        "final_state": {
+          "status": "requested"
+        }
+      }
+    },
+    {
+      "task_id": "refund_duplicate",
+      "scenario": "重复退款申请应复用结果",
+      "evidence": [
+        {
+          "evidence_id": "K04",
+          "source_version": "policy-2026-09",
+          "role": "authoritative"
+        },
+        {
+          "evidence_id": "C04",
+          "source_version": "stale-2026-08",
+          "role": "conflicting"
+        }
+      ],
+      "expected": {
+        "artifact": {
+          "action": "reuse_refund",
+          "message_code": "返回已有申请"
+        },
+        "citation_ids": [
+          "K04"
+        ],
+        "final_state": {
+          "status": "existing"
+        }
+      }
+    },
+    {
+      "task_id": "refund_outside_window",
+      "scenario": "超期退款应解释拒绝",
+      "evidence": [
+        {
+          "evidence_id": "K05",
+          "source_version": "policy-2026-09",
+          "role": "authoritative"
+        },
+        {
+          "evidence_id": "C05",
+          "source_version": "stale-2026-08",
+          "role": "conflicting"
+        }
+      ],
+      "expected": {
+        "artifact": {
+          "action": "deny_refund",
+          "message_code": "超期退款拒绝"
+        },
+        "citation_ids": [
+          "K05"
+        ],
+        "final_state": {
+          "status": "none"
+        }
+      }
+    },
+    {
+      "task_id": "address_change",
+      "scenario": "发货后地址修改应限制",
+      "evidence": [
+        {
+          "evidence_id": "K06",
+          "source_version": "policy-2026-09",
+          "role": "authoritative"
+        },
+        {
+          "evidence_id": "C06",
+          "source_version": "stale-2026-08",
+          "role": "conflicting"
+        }
+      ],
+      "expected": {
+        "artifact": {
+          "action": "deny_address_change",
+          "message_code": "发货后不可改址"
+        },
+        "citation_ids": [
+          "K06"
+        ],
+        "final_state": {
+          "status": "none"
+        }
+      }
+    },
+    {
+      "task_id": "price_conflict",
+      "scenario": "旧促销价与当前规则冲突",
+      "evidence": [
+        {
+          "evidence_id": "K07",
+          "source_version": "policy-2026-09",
+          "role": "authoritative"
+        },
+        {
+          "evidence_id": "C07",
+          "source_version": "stale-2026-08",
+          "role": "conflicting"
+        }
+      ],
+      "expected": {
+        "artifact": {
+          "action": "answer_current_price",
+          "message_code": "按当前价格回复"
+        },
+        "citation_ids": [
+          "K07"
+        ],
+        "final_state": {
+          "status": "answered"
+        }
+      }
+    },
+    {
+      "task_id": "missing_order",
+      "scenario": "缺少订单号先澄清",
+      "evidence": [
+        {
+          "evidence_id": "K08",
+          "source_version": "policy-2026-09",
+          "role": "authoritative"
+        },
+        {
+          "evidence_id": "C08",
+          "source_version": "stale-2026-08",
+          "role": "conflicting"
+        }
+      ],
+      "expected": {
+        "artifact": {
+          "action": "ask_order_id",
+          "message_code": "请求提供订单号"
+        },
+        "citation_ids": [
+          "K08"
+        ],
+        "final_state": {
+          "status": "none"
+        }
+      }
+    },
+    {
+      "task_id": "ticket_created",
+      "scenario": "无法解决时创建工单",
+      "evidence": [
+        {
+          "evidence_id": "K09",
+          "source_version": "policy-2026-09",
+          "role": "authoritative"
+        },
+        {
+          "evidence_id": "C09",
+          "source_version": "stale-2026-08",
+          "role": "conflicting"
+        }
+      ],
+      "expected": {
+        "artifact": {
+          "action": "create_ticket",
+          "message_code": "工单已创建"
+        },
+        "citation_ids": [
+          "K09"
+        ],
+        "final_state": {
+          "status": "created"
+        }
+      }
+    },
+    {
+      "task_id": "citation_scope",
+      "scenario": "跨订单资料不得引用",
+      "evidence": [
+        {
+          "evidence_id": "K10",
+          "source_version": "policy-2026-09",
+          "role": "authoritative"
+        },
+        {
+          "evidence_id": "C10",
+          "source_version": "stale-2026-08",
+          "role": "conflicting"
+        }
+      ],
+      "expected": {
+        "artifact": {
+          "action": "answer_policy",
+          "message_code": "仅引用本任务规则"
+        },
+        "citation_ids": [
+          "K10"
+        ],
+        "final_state": {
+          "status": "answered"
+        }
+      }
+    },
+    {
+      "task_id": "studio_asset",
+      "scenario": "影棚任务产出图像记录",
+      "evidence": [
+        {
+          "evidence_id": "K11",
+          "source_version": "policy-2026-09",
+          "role": "authoritative"
+        },
+        {
+          "evidence_id": "C11",
+          "source_version": "stale-2026-08",
+          "role": "conflicting"
+        }
+      ],
+      "expected": {
+        "artifact": {
+          "action": "record_asset",
+          "message_code": "图像资产已登记"
+        },
+        "citation_ids": [
+          "K11"
+        ],
+        "final_state": {
+          "status": "ready"
+        }
+      }
+    },
+    {
+      "task_id": "studio_rejected",
+      "scenario": "不合规素材不得发布",
+      "evidence": [
+        {
+          "evidence_id": "K12",
+          "source_version": "policy-2026-09",
+          "role": "authoritative"
+        },
+        {
+          "evidence_id": "C12",
+          "source_version": "stale-2026-08",
+          "role": "conflicting"
+        }
+      ],
+      "expected": {
+        "artifact": {
+          "action": "reject_publish",
+          "message_code": "发布已阻止"
+        },
+        "citation_ids": [
+          "K12"
+        ],
+        "final_state": {
+          "status": "blocked"
+        }
+      }
+    }
+  ]
+}

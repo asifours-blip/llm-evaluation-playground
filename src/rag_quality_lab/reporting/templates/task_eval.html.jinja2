@@ -1,0 +1,12 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><title>完整任务评测 {{ report.run_id }}</title>
+<style>body{font:15px/1.5 system-ui;max-width:1100px;margin:2rem auto;color:#17212f}table{border-collapse:collapse;width:100%}th,td{border:1px solid #dce2ea;padding:.55rem;text-align:left;vertical-align:top}th{background:#f7f9fc}code{overflow-wrap:anywhere}.muted{color:#647084}</style>
+</head><body>
+<h1>完整任务评测：{{ report.run_id }}</h1>
+<p class="muted">{{ report.source_kind }} · suite {{ report.suite_id }} {{ report.suite_version }} · hash <code>{{ report.suite_hash }}</code></p>
+<p>主指标：{{ report.summary.successful_tasks }} / {{ report.summary.total_tasks }} = {{ '%.1f'|format(report.summary.task_success_rate * 100) }}%；完整观测覆盖：{{ report.summary.complete_observations }} / {{ report.summary.total_tasks }} = {{ '%.1f'|format(report.summary.observation_coverage * 100) }}%；已观测成功率：{{ '%.1f'|format(report.summary.observed_success_rate * 100) }}%；步骤通过率：{{ '%.1f'|format(report.summary.step_pass_rate * 100) }}%。</p>
+<p class="muted">缺少观测仍计入固定 suite 分母。此演示集是合成数据，不代表真实上游系统性能。</p>
+<table><thead><tr><th>任务</th><th>状态</th><th>确定性检查</th><th>诊断</th><th>期望 / 观测</th></tr></thead><tbody>
+{% for task in report.tasks %}<tr><td>{{ task.task_id }}<br>{{ task.scenario }}</td><td>{{ task.status }}</td><td>{% for name, passed in task.checks.items() %}{{ name }}: {{ passed }}<br>{% endfor %}</td><td>{{ task.diagnostics|join(', ') }}</td><td><details><summary>查看字段差异</summary><pre>期望: {{ task.expected.model_dump(mode='json')|tojson(indent=2) }}
+观测: {{ task.observed.model_dump(mode='json')|tojson(indent=2) if task.observed else '无观测' }}</pre></details></td></tr>{% endfor %}
+</tbody></table></body></html>

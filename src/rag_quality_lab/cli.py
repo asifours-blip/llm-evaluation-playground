@@ -70,6 +70,14 @@ from rag_quality_lab.providers.fake import is_local_embedding_model
 from rag_quality_lab.reporting import generate_reports
 from rag_quality_lab.reporting.report import generate_comparison_report
 from rag_quality_lab.retrieval.index import load_documents
+from rag_quality_lab.task_eval.core import compare as compare_tasks
+from rag_quality_lab.task_eval.core import (
+    evaluate_files,
+    load_observations,
+    load_result,
+    load_suite,
+)
+from rag_quality_lab.task_eval.report import write_report
 
 CommandHandler = Callable[[argparse.Namespace], int]
 
@@ -155,6 +163,24 @@ def build_parser() -> argparse.ArgumentParser:
     verify.add_argument("--dataset", required=True, type=Path)
     verify.set_defaults(handler=_handle_dataset_verify)
 
+    task_eval = subcommands.add_parser("task-eval", help="score recorded complete agent tasks")
+    task_commands = task_eval.add_subparsers(dest="task_command", required=True)
+    task_validate = task_commands.add_parser(
+        "validate", help="validate a frozen suite and observations"
+    )
+    task_validate.add_argument("--suite", required=True, type=Path)
+    task_validate.add_argument("--observations", type=Path)
+    task_validate.set_defaults(handler=_handle_task_eval)
+    task_run = task_commands.add_parser("run", help="score observations and write JSON/HTML")
+    task_run.add_argument("--suite", required=True, type=Path)
+    task_run.add_argument("--observations", required=True, type=Path)
+    task_run.add_argument("--output", required=True, type=Path)
+    task_run.set_defaults(handler=_handle_task_eval)
+    task_compare = task_commands.add_parser("compare", help="compare two task result JSON files")
+    task_compare.add_argument("--baseline", required=True, type=Path)
+    task_compare.add_argument("--candidate", required=True, type=Path)
+    task_compare.set_defaults(handler=_handle_task_eval)
+
     regression = subcommands.add_parser("regression", help="evaluate regression rules")
     regression.add_argument("--fixture", type=Path)
     regression.add_argument("--database", type=Path)
@@ -232,6 +258,25 @@ def main(argv: Sequence[str] | None = None) -> int:
     except (KeyError, OSError, ProviderError, ValueError) as error:
         parser.error(str(error))
     return 2
+
+
+def _handle_task_eval(args: argparse.Namespace) -> int:
+    if args.task_command == "compare":
+        _print_json(compare_tasks(load_result(args.baseline), load_result(args.candidate)))
+        return 0
+    suite = load_suite(args.suite)
+    if args.task_command == "validate":
+        if args.observations is not None:
+            load_observations(args.observations, suite)
+        _print_json({"suite_id": suite.suite_id, "suite_version": suite.suite_version,
+                     "suite_hash": suite.content_hash(), "task_count": len(suite.tasks),
+                     "source_kind": suite.source_kind, "status": "valid"})
+        return 0
+    result = evaluate_files(args.suite, args.observations)
+    json_path, html_path = write_report(result, args.output)
+    _print_json({"report_json": str(json_path.resolve()),
+                 "report_html": str(html_path.resolve()), "summary": result.summary})
+    return 0
 
 
 def _handle_validate(args: argparse.Namespace) -> int:

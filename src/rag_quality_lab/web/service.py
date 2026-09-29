@@ -33,6 +33,8 @@ from rag_quality_lab.experiments.store import ExperimentStore
 from rag_quality_lab.reporting import generate_reports
 from rag_quality_lab.reporting.report import ReportPaths, generate_comparison_report
 from rag_quality_lab.retrieval.index import load_documents
+from rag_quality_lab.task_eval.core import compare as compare_task_results
+from rag_quality_lab.task_eval.core import load_result
 
 
 class LiveRunNotAllowed(PermissionError):
@@ -237,6 +239,15 @@ def generate_pair_report(
         "html_sha256": paths.html_sha256,
         "warning": paired.warning,
     }
+
+
+def task_result_view(report_path: Path) -> dict[str, Any]:
+    """Read an already-scored task artifact; no evaluation or writing on GET."""
+    return load_result(report_path).model_dump(mode="json")
+
+
+def task_compare_view(baseline_path: Path, candidate_path: Path) -> dict[str, Any]:
+    return compare_task_results(load_result(baseline_path), load_result(candidate_path))
 
 
 def artifact_download_path(artifact_dir: Path, requested: str) -> Path:
