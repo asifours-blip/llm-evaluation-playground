@@ -105,6 +105,18 @@
       <pre id="compare-out">-</pre>
     </div>
   </div>
+  <h2>Complete task evaluation (recorded, offline)</h2>
+  <p class="muted">Open a task-eval JSON report created by the CLI. Synthetic demo results are not evidence of upstream performance.</p>
+  <label for="task-report-path">Task report JSON path</label>
+  <input id="task-report-path" type="text" placeholder="artifacts/task-demo/task-....json">
+  <button onclick="loadTaskReport()">View task results</button>
+  <p id="task-summary" aria-live="polite">-</p>
+  <table><thead><tr><th>Task</th><th>Status</th><th>Checks</th><th>Diagnostics</th><th>Expected / observed</th></tr></thead>
+    <tbody id="task-results-body"></tbody></table>
+  <label for="task-baseline-path">Baseline task report JSON path</label>
+  <input id="task-baseline-path" type="text">
+  <button onclick="compareTaskReports()">Compare task versions</button>
+  <pre id="task-compare-out">-</pre>
 </main>
 
 <script>
@@ -121,7 +133,8 @@ function showError(id, error) { document.getElementById(id).textContent = 'Error
 // Persist the fields that identify "which experiment am I looking at" so a
 // page refresh returns to the same one instead of a blank workbench.
 const PERSISTED_FIELDS = ['dataset-path', 'config-path', 'database-path', 'experiment-id',
-  'baseline-id', 'baseline-config', 'candidate-config', 'output-dir'];
+  'baseline-id', 'baseline-config', 'candidate-config', 'output-dir',
+  'task-report-path', 'task-baseline-path'];
 function restorePersistedFields() {
   for (const id of PERSISTED_FIELDS) {
     const saved = localStorage.getItem('ragql.' + id);
@@ -213,6 +226,43 @@ async function compare() {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
     }));
   } catch (e) { showError('compare-out', e); }
+}
+async function loadTaskReport() {
+  const summary = document.getElementById('task-summary');
+  const body = document.getElementById('task-results-body');
+  body.replaceChildren();
+  try {
+    const result = await callApi('/api/task-eval/result?report=' + encodeURIComponent(q('task-report-path')));
+    const score = result.summary;
+    summary.textContent = `${result.source_kind} · suite ${result.suite_id} ${result.suite_version} · task success ${score.successful_tasks}/${score.total_tasks} (${(score.task_success_rate * 100).toFixed(1)}%) · complete observations ${score.complete_observations}/${score.total_tasks} · received ${score.received_observations}/${score.total_tasks} · observed success ${(score.observed_success_rate * 100).toFixed(1)}% · step pass ${(score.step_pass_rate * 100).toFixed(1)}%`;
+    for (const task of result.tasks) {
+      const row = document.createElement('tr');
+      for (const value of [task.task_id + ' — ' + task.scenario, task.status,
+                           Object.entries(task.checks).map(([key, passed]) => key + ': ' + passed).join(', '),
+                           task.diagnostics.join(', ')]) {
+        const cell = document.createElement('td');
+        cell.textContent = value;
+        row.appendChild(cell);
+      }
+      const detailCell = document.createElement('td');
+      const detail = document.createElement('details');
+      const label = document.createElement('summary');
+      label.textContent = 'View fields';
+      const fields = document.createElement('pre');
+      fields.textContent = JSON.stringify({expected: task.expected, observed: task.observed}, null, 2);
+      detail.append(label, fields);
+      detailCell.appendChild(detail);
+      row.appendChild(detailCell);
+      body.appendChild(row);
+    }
+  } catch (error) { summary.textContent = 'Error: ' + error.message; }
+}
+async function compareTaskReports() {
+  try {
+    const url = '/api/task-eval/compare?baseline=' + encodeURIComponent(q('task-baseline-path')) +
+      '&candidate=' + encodeURIComponent(q('task-report-path'));
+    show('task-compare-out', await callApi(url));
+  } catch (error) { showError('task-compare-out', error); }
 }
 </script>
 </body>

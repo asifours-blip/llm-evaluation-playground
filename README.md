@@ -64,3 +64,5 @@ rag-quality serve --workspace .                      # 工作台：http://127.0.
 ---
 
 仓库最早是一个 LangChain 演示项目，后来重写为现在的 `rag_quality_lab`；仓库名 `llm-evaluation-playground` 为了保留旧链接没有改。
+
+完整任务的离线评测入口、独立输入契约和合成演示边界见 [Complete task evaluation](docs/task-evaluation.md)。

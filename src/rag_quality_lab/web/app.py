@@ -117,6 +117,8 @@ route("POST", r"/api/experiments/(?P<experiment_id>[^/]+)/report", "report")
 route("GET", r"/api/runs/(?P<token>[^/]+)", "run_status")
 route("POST", r"/api/compare", "compare")
 route("GET", r"/api/artifacts/download", "download")
+route("GET", r"/api/task-eval/result", "task_result")
+route("GET", r"/api/task-eval/compare", "task_compare")
 
 
 WSGIApp = Callable[[WSGIEnviron, StartResponse], Iterable[bytes]]
@@ -157,6 +159,12 @@ def create_app(*, allow_live: bool = False, workspace: Path | str | None = None)
         ),
         "compare": lambda environ, params, query: _handle_compare(environ, resolved_workspace),
         "download": lambda environ, params, query: _handle_download(query, resolved_workspace),
+        "task_result": (
+            lambda environ, params, query: _handle_task_result(query, resolved_workspace)
+        ),
+        "task_compare": (
+            lambda environ, params, query: _handle_task_compare(query, resolved_workspace)
+        ),
         "start": (
             lambda environ, params, query: _handle_start(environ, manager, resolved_workspace)
         ),
@@ -324,6 +332,17 @@ def _handle_compare(environ: WSGIEnviron, workspace: Path) -> Response:
         output,
     )
     return Response.json(payload)
+
+
+def _handle_task_result(query: Query, workspace: Path) -> Response:
+    path = _required_workspace_path(query, "report", workspace)
+    return Response.json(service.task_result_view(path))
+
+
+def _handle_task_compare(query: Query, workspace: Path) -> Response:
+    baseline = _required_workspace_path(query, "baseline", workspace)
+    candidate = _required_workspace_path(query, "candidate", workspace)
+    return Response.json(service.task_compare_view(baseline, candidate))
 
 
 def _handle_download(query: Query, workspace: Path) -> Response:
