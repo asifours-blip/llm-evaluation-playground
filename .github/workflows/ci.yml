@@ -19,10 +19,12 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-          cache: pip
 
-      - name: Install package and development tools
-        run: python -m pip install -e ".[dev]"
+      - name: Install locked package and development tools
+        run: |
+          python -m pip install uv==0.13.5
+          uv sync --locked --python 3.11 --extra dev
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
 
       - name: Lint
         run: ruff check .

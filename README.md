@@ -40,11 +40,12 @@ Python 3.11 · Pydantic · SQLite · Jinja2 · OpenAI 兼容 HTTP 客户端 · p
 
 ## 本地运行
 
+先安装 [uv](https://docs.astral.sh/uv/getting-started/installation/)，再在仓库根目录运行以下命令。离线实验无需模型密钥。
+
 ```bash
-python -m venv .venv && source .venv/bin/activate   # Windows：.venv\Scripts\Activate.ps1
-pip install -e ".[dev]"
-rag-quality run --config configs/offline.yaml        # 离线实验，不需要模型密钥
-rag-quality serve --workspace .                      # 工作台：http://127.0.0.1:8765
+uv sync --locked --python 3.11 --extra dev
+uv run --no-sync rag-quality run --config configs/offline.yaml
+uv run --no-sync rag-quality serve --workspace .     # 工作台 http://127.0.0.1:8765
 ```
 
 真实模型实验、中断恢复、成对比较和人工盲标等完整用法见[运行参考](docs/reference.md)。
