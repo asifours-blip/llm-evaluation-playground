@@ -59,17 +59,12 @@ versioned config + dataset + Markdown corpus
 
 ## 快速开始
 
-需要 Python 3.11+：
+项目支持 Python 3.11+。安装 [uv](https://docs.astral.sh/uv/getting-started/installation/) 后，以下命令按 `uv.lock` 建立 Python 3.11 环境。
 
 ```bash
-python -m venv .venv
-# Linux/macOS
+uv sync --locked --python 3.11 --extra dev
+# Linux/macOS 使用下一行；Windows PowerShell 改用 .\.venv\Scripts\Activate.ps1
 source .venv/bin/activate
-
-# Windows PowerShell
-.venv\Scripts\Activate.ps1
-
-python -m pip install -e ".[dev]"
 
 python -m rag_quality_lab.cli validate --config configs/offline.yaml
 python -m rag_quality_lab.cli run --config configs/offline.yaml
